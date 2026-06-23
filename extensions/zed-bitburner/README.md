@@ -1,11 +1,61 @@
 # Bitburner Zed Extension
 
-Thin Zed wrapper for the `bbrs` CLI.
+Thin Zed scaffold for the `bbrs` CLI.
 
-This scaffold does not rewrite sync logic. The core CLI remains the source of truth. Future Zed commands should invoke an installed or local `bbrs` binary like:
+This extension does not implement sync logic. The core CLI remains the source of
+truth:
 
 ```text
-bbrs sync <workspace-root> <remote-dir> --server <server> --addr <addr>
+bbrs sync <workspace-root> [remote-dir] --server home --addr 127.0.0.1:12525
+```
+
+## Current Status
+
+The Rust entrypoint is intentionally minimal and buildable with
+`zed_extension_api`. It only registers an extension type.
+
+Current Zed extension docs do not expose a general API for extensions to add
+custom editor commands or task definitions. Zed tasks are configured by users in
+`tasks.json`, so the practical v0.2 integration is a documented task that
+invokes `bbrs`.
+
+## Manual Zed Task
+
+Add this to `.zed/tasks.json` in a project you want to sync:
+
+```json
+[
+  {
+    "label": "Bitburner: sync workspace",
+    "command": "bbrs",
+    "args": [
+      "sync",
+      "$ZED_WORKTREE_ROOT",
+      "--server",
+      "home",
+      "--addr",
+      "127.0.0.1:12525"
+    ],
+    "reveal": "always",
+    "hide": "never",
+    "allow_concurrent_runs": false,
+    "use_new_terminal": false
+  }
+]
+```
+
+For a remote directory, insert it after `$ZED_WORKTREE_ROOT`:
+
+```json
+"args": [
+  "sync",
+  "$ZED_WORKTREE_ROOT",
+  "scripts",
+  "--server",
+  "home",
+  "--addr",
+  "127.0.0.1:12525"
+]
 ```
 
 ## Intended Settings
@@ -15,8 +65,12 @@ bbrs sync <workspace-root> <remote-dir> --server <server> --addr <addr>
 - `addr`: Remote API listen address, default `127.0.0.1:12525`
 - `clean`: pass `--clean` when supported, default `false`
 
-## Current Status
+## Roadmap
 
-This pass is a scaffold only. It includes extension metadata and a tiny Rust library for building future `bbrs sync` arguments.
+- v0.1: CLI works.
+- v0.2: Zed task invokes `bbrs`.
+- v0.3: Optional MCP/Agent integration.
+- Future: daemon mode or IPC for repeated syncs.
 
-It is not added to the root Cargo package or workspace. Zed extensions compile to WASM and require Zed-specific extension APIs before this can run inside Zed. Those APIs are intentionally not wired here yet.
+This crate is not added to the root Cargo workspace. Keep the CLI independent
+from Zed.
