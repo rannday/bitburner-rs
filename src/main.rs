@@ -21,146 +21,149 @@ fn run() -> AppResult<()> {
     let command = args::parse_env()?;
 
     match command {
-    Command::Help => {
-      print_help();
-      Ok(())
-    }
-    Command::Version => {
-      println!("bbrs {}", env!("CARGO_PKG_VERSION"));
-      Ok(())
-    }
-    Command::Serve { address } => ws::serve(&address),
-    Command::Mcp => Err(AppError::NotImplemented(
-      "mcp command not implemented yet; future Zed integration should call bbrs sync or bbrs mcp"
-        .to_string(),
-    )),
-    Command::Files { server } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      for file in remote.get_file_names(&server)? {
-        println!("{file}");
-      }
-      Ok(())
-    }
-    Command::Get {
-      server,
-      filename,
-      local_path,
-    } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      let content = remote.get_file(&server, &filename)?;
-      if let Some(path) = local_path {
-        std::fs::write(path, content)?;
-      } else {
-        print!("{content}");
-      }
-      Ok(())
-    }
-    Command::Push {
-      server,
-      remote_filename,
-      local_path,
-    } => {
-      let content = std::fs::read_to_string(local_path)?;
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      remote.push_file(&server, &remote_filename, &content)?;
-      println!("{remote_filename}");
-      Ok(())
-    }
-    Command::Delete { server, filename } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      remote.delete_file(&server, &filename)?;
-      println!("{filename}");
-      Ok(())
-    }
-    Command::Metadata { server, filename } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      let metadata = remote.get_file_metadata(&server, &filename)?;
-      println!("{}", serde_json::to_string_pretty(&metadata)?);
-      Ok(())
-    }
-    Command::AllFiles { server, local_path } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      let files = remote.get_all_files(&server)?;
-      std::fs::write(local_path, serde_json::to_string_pretty(&files)?)?;
-      Ok(())
-    }
-    Command::AllMetadata { server } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      let metadata = remote.get_all_file_metadata(&server)?;
-      println!("{}", serde_json::to_string_pretty(&metadata)?);
-      Ok(())
-    }
-    Command::Ram { server, filename } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      println!("{}", remote.calculate_ram(&server, &filename)?);
-      Ok(())
-    }
-    Command::Defs { local_path } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      let content = remote.get_definition_file()?;
-      if let Some(path) = local_path {
-        std::fs::write(path, content)?;
-      } else {
-        print!("{content}");
-      }
-      Ok(())
-    }
-    Command::Save { local_path } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      let save = remote.get_save_file()?;
-      std::fs::write(local_path, serde_json::to_string_pretty(&save)?)?;
-      Ok(())
-    }
-    Command::Sync(options) => {
-      let plan = fs_sync::build_sync_plan(&options.local_dir, options.remote_dir.as_deref())?;
-      print_sync_summary(
-        plan.len(),
-        &options.local_dir,
-        &options.server,
-        options.remote_dir.as_deref(),
-      );
-
-      if !should_listen_for_sync(&plan, options.dry_run) {
-        if plan.is_empty() {
-          println!("No uploadable files found.");
-        } else {
-          for item in plan {
-            println!(
-              "{} -> {}:{}",
-              item.local_path.display(),
-              options.server,
-              item.remote_path
-            );
-          }
+        Command::Help => {
+            print_help();
+            Ok(())
         }
-        return Ok(());
-      }
+        Command::Version => {
+            println!("bbrs {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Command::Serve { address } => ws::serve(&address),
+        Command::Mcp => {
+            println!("MCP support is planned.");
+            println!(
+                "Current recommended Zed integration is a documented task calling `bbrs sync`."
+            );
+            Ok(())
+        }
+        Command::Files { server } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            for file in remote.get_file_names(&server)? {
+                println!("{file}");
+            }
+            Ok(())
+        }
+        Command::Get {
+            server,
+            filename,
+            local_path,
+        } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            let content = remote.get_file(&server, &filename)?;
+            if let Some(path) = local_path {
+                std::fs::write(path, content)?;
+            } else {
+                print!("{content}");
+            }
+            Ok(())
+        }
+        Command::Push {
+            server,
+            remote_filename,
+            local_path,
+        } => {
+            let content = std::fs::read_to_string(local_path)?;
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            remote.push_file(&server, &remote_filename, &content)?;
+            println!("{remote_filename}");
+            Ok(())
+        }
+        Command::Delete { server, filename } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            remote.delete_file(&server, &filename)?;
+            println!("{filename}");
+            Ok(())
+        }
+        Command::Metadata { server, filename } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            let metadata = remote.get_file_metadata(&server, &filename)?;
+            println!("{}", serde_json::to_string_pretty(&metadata)?);
+            Ok(())
+        }
+        Command::AllFiles { server, local_path } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            let files = remote.get_all_files(&server)?;
+            std::fs::write(local_path, serde_json::to_string_pretty(&files)?)?;
+            Ok(())
+        }
+        Command::AllMetadata { server } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            let metadata = remote.get_all_file_metadata(&server)?;
+            println!("{}", serde_json::to_string_pretty(&metadata)?);
+            Ok(())
+        }
+        Command::Ram { server, filename } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            println!("{}", remote.calculate_ram(&server, &filename)?);
+            Ok(())
+        }
+        Command::Defs { local_path } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            let content = remote.get_definition_file()?;
+            if let Some(path) = local_path {
+                std::fs::write(path, content)?;
+            } else {
+                print!("{content}");
+            }
+            Ok(())
+        }
+        Command::Save { local_path } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            let save = remote.get_save_file()?;
+            std::fs::write(local_path, serde_json::to_string_pretty(&save)?)?;
+            Ok(())
+        }
+        Command::Sync(options) => {
+            let plan = fs_sync::build_sync_plan(&options.local_dir, options.remote_dir.as_deref())?;
+            print_sync_summary(
+                plan.len(),
+                &options.local_dir,
+                &options.server,
+                options.remote_dir.as_deref(),
+            );
 
-      if options.clean {
-        return Err(AppError::NotImplemented(
-          "sync --clean is TODO: dry-run works, upload works without clean".to_string(),
-        ));
-      }
-      let synced = plan.len();
-      let mut remote = RemoteClient::listen(&options.address)?;
-      for item in plan {
-        let content = std::fs::read_to_string(&item.local_path)?;
-        remote.push_file(&options.server, &item.remote_path, &content)?;
-        println!(
-          "OK {} -> {}:{}",
-          item.local_path.display(),
-          options.server,
-          item.remote_path
-        );
-      }
-      println!("Synced {synced} file(s).");
-      Ok(())
+            if !should_listen_for_sync(&plan, options.dry_run) {
+                if plan.is_empty() {
+                    println!("No uploadable files found.");
+                } else {
+                    for item in plan {
+                        println!(
+                            "{} -> {}:{}",
+                            item.local_path.display(),
+                            options.server,
+                            item.remote_path
+                        );
+                    }
+                }
+                return Ok(());
+            }
+
+            if options.clean {
+                return Err(AppError::NotImplemented(
+                    "sync --clean is TODO: dry-run works, upload works without clean".to_string(),
+                ));
+            }
+            let synced = plan.len();
+            let mut remote = RemoteClient::listen(&options.address)?;
+            for item in plan {
+                let content = std::fs::read_to_string(&item.local_path)?;
+                remote.push_file(&options.server, &item.remote_path, &content)?;
+                println!(
+                    "OK {} -> {}:{}",
+                    item.local_path.display(),
+                    options.server,
+                    item.remote_path
+                );
+            }
+            println!("Synced {synced} file(s).");
+            Ok(())
+        }
+        Command::Clean { server } => {
+            let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
+            remote.clean_server(&server)
+        }
     }
-    Command::Clean { server } => {
-      let mut remote = RemoteClient::listen(DEFAULT_ADDRESS)?;
-      remote.clean_server(&server)
-    }
-  }
 }
 
 fn print_sync_summary(

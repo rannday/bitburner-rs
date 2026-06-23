@@ -41,3 +41,8 @@ If `link.exe` is found but `kernel32.lib` is missing, run `cargo` from a Develop
 ## Zed Extension
 
 https://zed.dev/docs/extensions/developing-extensions
+
+Plans:
+
+- [Zed integration plan](docs/zed-plan.md)
+- [MCP integration plan](docs/mcp-plan.md)

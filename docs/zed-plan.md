@@ -14,8 +14,8 @@ binary.
 ## Roadmap
 
 - v0.1: CLI works.
-- v0.2: Zed task invokes `bbrs`.
-- v0.3: Optional MCP/Agent integration.
+- v0.2: Zed task invokes `bbrs`. This is the current integration path.
+- v0.3: MCP exposes Bitburner tools to Zed Agent.
 - Future: daemon mode or IPC for repeated syncs.
 
 First useful Zed wrapper flow:
@@ -62,7 +62,7 @@ Later MCP flow:
 bbrs mcp
 ```
 
-`bbrs mcp` will later expose sync and Remote API tools to Zed Agent through MCP.
+`bbrs mcp` will later expose sync and Remote API tools to Zed Agent through MCP. See [mcp-plan.md](mcp-plan.md).
 
 Do not make the CLI depend on Zed.
 
