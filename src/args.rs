@@ -2,12 +2,15 @@ use std::env;
 use std::path::PathBuf;
 
 use crate::error::{AppError, AppResult};
+use crate::remote::DEFAULT_ADDRESS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Help,
     Version,
-    Serve,
+    Serve {
+        address: String,
+    },
     Files {
         server: String,
     },
@@ -56,6 +59,7 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncOptions {
     pub server: String,
+    pub address: String,
     pub local_dir: PathBuf,
     pub remote_dir: Option<String>,
     pub clean: bool,
@@ -80,7 +84,7 @@ where
     match command.as_str() {
         "help" | "-h" | "--help" => Ok(Command::Help),
         "version" | "-V" | "--version" => Ok(Command::Version),
-        "serve" => expect_no_args(&command, args).map(|_| Command::Serve),
+        "serve" => parse_serve(command, args),
         "mcp" => expect_no_args(&command, args).map(|_| Command::Mcp),
         "files" => parse_optional_server(command, args).map(|server| Command::Files { server }),
         "get" => parse_get(command, args),
@@ -153,10 +157,36 @@ fn parse_defs(command: String, args: Vec<String>) -> AppResult<Command> {
     }
 }
 
+fn parse_serve(command: String, args: Vec<String>) -> AppResult<Command> {
+    let mut address = DEFAULT_ADDRESS.to_string();
+    let mut index = 0;
+
+    while index < args.len() {
+        let arg = &args[index];
+        match arg.as_str() {
+            "--addr" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(usage(&command, "[--addr <host:port>]"));
+                };
+                address = value.clone();
+            }
+            _ if arg.starts_with("--") => {
+                return Err(AppError::Usage(format!("unknown serve flag '{arg}'")));
+            }
+            _ => return Err(usage(&command, "[--addr <host:port>]")),
+        }
+        index += 1;
+    }
+
+    Ok(Command::Serve { address })
+}
+
 fn parse_sync(command: String, args: Vec<String>) -> AppResult<SyncOptions> {
     let mut clean = false;
     let mut dry_run = false;
     let mut server = "home".to_string();
+    let mut address = DEFAULT_ADDRESS.to_string();
     let mut positional = Vec::new();
     let mut index = 0;
 
@@ -168,12 +198,16 @@ fn parse_sync(command: String, args: Vec<String>) -> AppResult<SyncOptions> {
             "--server" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
-                    return Err(AppError::Usage(
-                        "usage: bbrs sync [local-dir] [remote-dir] [--server <server>] [--clean] [--dry-run]"
-                            .to_string(),
-                    ));
+                    return Err(sync_usage(&command));
                 };
                 server = value.clone();
+            }
+            "--addr" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(sync_usage(&command));
+                };
+                address = value.clone();
             }
             _ if arg.starts_with("--") => {
                 return Err(AppError::Usage(format!("unknown sync flag '{arg}'")));
@@ -184,14 +218,12 @@ fn parse_sync(command: String, args: Vec<String>) -> AppResult<SyncOptions> {
     }
 
     if positional.len() > 2 {
-        return Err(usage(
-            &command,
-            "[local-dir] [remote-dir] [--server <server>] [--clean] [--dry-run]",
-        ));
+        return Err(sync_usage(&command));
     }
 
     Ok(SyncOptions {
         server,
+        address,
         local_dir: positional
             .first()
             .map(PathBuf::from)
@@ -200,6 +232,13 @@ fn parse_sync(command: String, args: Vec<String>) -> AppResult<SyncOptions> {
         clean,
         dry_run,
     })
+}
+
+fn sync_usage(command: &str) -> AppError {
+    usage(
+        command,
+        "[local-dir] [remote-dir] [--server <server>] [--addr <host:port>] [--clean] [--dry-run]",
+    )
 }
 
 fn parse_optional_server(command: String, args: Vec<String>) -> AppResult<String> {
@@ -267,6 +306,7 @@ mod tests {
             command,
             Command::Sync(SyncOptions {
                 server: "home".to_string(),
+                address: DEFAULT_ADDRESS.to_string(),
                 local_dir: PathBuf::from("."),
                 remote_dir: Some("scripts".to_string()),
                 clean: true,
@@ -297,6 +337,7 @@ mod tests {
             parse(["sync"]).expect("parse"),
             Command::Sync(SyncOptions {
                 server: "home".to_string(),
+                address: DEFAULT_ADDRESS.to_string(),
                 local_dir: PathBuf::from("."),
                 remote_dir: None,
                 clean: false,
@@ -311,11 +352,52 @@ mod tests {
             parse(["sync", "src", "remote", "--server", "n00dles"]).expect("parse"),
             Command::Sync(SyncOptions {
                 server: "n00dles".to_string(),
+                address: DEFAULT_ADDRESS.to_string(),
                 local_dir: PathBuf::from("src"),
                 remote_dir: Some("remote".to_string()),
                 clean: false,
                 dry_run: false,
             })
         );
+    }
+
+    #[test]
+    fn parses_sync_with_addr() {
+        assert_eq!(
+            parse(["sync", "--addr", "127.0.0.1:12525"]).expect("parse"),
+            Command::Sync(SyncOptions {
+                server: "home".to_string(),
+                address: "127.0.0.1:12525".to_string(),
+                local_dir: PathBuf::from("."),
+                remote_dir: None,
+                clean: false,
+                dry_run: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_serve_with_addr() {
+        assert_eq!(
+            parse(["serve", "--addr", "127.0.0.1:12525"]).expect("parse"),
+            Command::Serve {
+                address: "127.0.0.1:12525".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_missing_sync_addr_value() {
+        let err = parse(["sync", "--addr"]).expect_err("error");
+        assert_eq!(
+            err.to_string(),
+            "usage: bbrs sync [local-dir] [remote-dir] [--server <server>] [--addr <host:port>] [--clean] [--dry-run]"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_serve_addr_value() {
+        let err = parse(["serve", "--addr"]).expect_err("error");
+        assert_eq!(err.to_string(), "usage: bbrs serve [--addr <host:port>]");
     }
 }
