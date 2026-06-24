@@ -10,47 +10,24 @@ use crate::cli::{execute_with_client, print_repl_help};
 use crate::error::AppResult;
 use crate::remote::RemoteClient;
 
+type SharedConnection = Arc<Mutex<ConnectionSlot>>;
+
+#[derive(Default)]
+struct ConnectionSlot {
+    generation: u64,
+    client: Option<RemoteClient>,
+}
+
 pub fn serve(address: &str) -> AppResult<()> {
     let listener = TcpListener::bind(address)
         .with_context(|| format!("bind websocket server on {address}"))?;
     println!("listening on {address}");
     println!("waiting for Bitburner Remote API client");
 
-    let current = Arc::new(Mutex::new(None));
+    let current = Arc::new(Mutex::new(ConnectionSlot::default()));
     let accept_current = Arc::clone(&current);
 
-    thread::spawn(move || {
-        for incoming in listener.incoming() {
-            match incoming {
-                Ok(stream) => {
-                    let peer = stream
-                        .peer_addr()
-                        .map_or_else(|_| "<unknown>".to_string(), |addr| addr.to_string());
-                    println!("client connected from {peer}");
-
-                    match RemoteClient::from_stream(stream) {
-                        Ok(client) => match accept_current.lock() {
-                            Ok(mut slot) => {
-                                if slot.is_some() {
-                                    println!("replacing previous Bitburner connection");
-                                }
-                                *slot = Some(client);
-                            }
-                            Err(_) => {
-                                eprintln!("error: connection state mutex poisoned");
-                                return;
-                            }
-                        },
-                        Err(err) => eprintln!("error: {err:#}"),
-                    }
-                }
-                Err(err) => {
-                    eprintln!("error: accept websocket connection failed: {err}");
-                    return;
-                }
-            }
-        }
-    });
+    thread::spawn(move || accept_loop(listener, accept_current));
 
     println!(
         "ready. enter commands like `servers`, `files home`, or `sync home game_files scripts`."
@@ -59,7 +36,51 @@ pub fn serve(address: &str) -> AppResult<()> {
     repl(current)
 }
 
-fn repl(current: Arc<Mutex<Option<RemoteClient>>>) -> AppResult<()> {
+fn accept_loop(listener: TcpListener, current: SharedConnection) {
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(stream) => {
+                let peer = stream
+                    .peer_addr()
+                    .map_or_else(|_| "<unknown>".to_string(), |addr| addr.to_string());
+                println!("client connected from {peer}");
+
+                match RemoteClient::from_stream(stream) {
+                    Ok(client) => replace_connection(&current, client),
+                    Err(err) => eprintln!("error: {err:#}"),
+                }
+            }
+            Err(err) => {
+                eprintln!("error: accept websocket connection failed: {err}");
+                return;
+            }
+        }
+    }
+}
+
+fn replace_connection(current: &SharedConnection, client: RemoteClient) {
+    let previous = match current.lock() {
+        Ok(mut slot) => {
+            slot.generation += 1;
+            let previous = slot.client.take();
+            if previous.is_some() {
+                println!("replacing previous Bitburner connection");
+            }
+            slot.client = Some(client);
+            previous
+        }
+        Err(_) => {
+            eprintln!("error: connection state mutex poisoned");
+            return;
+        }
+    };
+
+    if let Some(mut previous) = previous {
+        let _ = previous.close();
+    }
+}
+
+fn repl(current: SharedConnection) -> AppResult<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
@@ -102,20 +123,69 @@ fn repl(current: Arc<Mutex<Option<RemoteClient>>>) -> AppResult<()> {
             continue;
         }
 
-        let result = {
-            let mut guard = current
-                .lock()
-                .map_err(|_| anyhow::anyhow!("connection state mutex poisoned"))?;
-            match guard.as_mut() {
-                Some(remote) => execute_with_client(cli.command, remote),
-                None => Err(anyhow::anyhow!("Bitburner is not connected")),
-            }
-        };
+        let result = execute_repl_command(&current, cli.command);
 
-        if let Err(err) = result {
-            eprintln!("error: {err:#}");
+        match result {
+            Ok(output) => output.print()?,
+            Err(err) => eprintln!("error: {err:#}"),
         }
     }
+}
+
+fn execute_repl_command(
+    current: &SharedConnection,
+    command: args::ReplCommand,
+) -> AppResult<crate::cli::CommandOutput> {
+    let (generation, mut remote) = take_connection(current)?;
+    let result = execute_with_client(command, &mut remote);
+    restore_or_close_connection(current, generation, remote, result.is_ok())?;
+    result
+}
+
+fn take_connection(current: &SharedConnection) -> AppResult<(u64, RemoteClient)> {
+    let mut slot = current
+        .lock()
+        .map_err(|_| anyhow::anyhow!("connection state mutex poisoned"))?;
+    let Some(remote) = slot.client.take() else {
+        anyhow::bail!("Bitburner is not connected");
+    };
+    Ok((slot.generation, remote))
+}
+
+fn restore_or_close_connection(
+    current: &SharedConnection,
+    generation: u64,
+    remote: RemoteClient,
+    keep: bool,
+) -> AppResult<()> {
+    let mut remote = Some(remote);
+
+    if !keep {
+        if let Some(mut remote) = remote {
+            let _ = remote.close();
+        }
+        return Ok(());
+    }
+
+    let should_close = {
+        let mut slot = current
+            .lock()
+            .map_err(|_| anyhow::anyhow!("connection state mutex poisoned"))?;
+        if slot.generation == generation && slot.client.is_none() {
+            slot.client = remote.take();
+            false
+        } else {
+            true
+        }
+    };
+
+    if should_close {
+        if let Some(mut remote) = remote {
+            let _ = remote.close();
+        }
+    }
+
+    Ok(())
 }
 
 pub fn parse_repl_words(line: &str) -> AppResult<Vec<String>> {
