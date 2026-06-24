@@ -1,6 +1,6 @@
 # MCP Integration Plan
 
-`bbrs mcp` is planned as the future Zed Agent integration path. The working product today is still the CLI and the documented Zed task that calls `bbrs sync`.
+`bbrs mcp` is planned as the future Zed Agent integration path. The working product today is `bbrs serve` and its REPL commands.
 
 ## Why MCP
 
@@ -24,7 +24,7 @@ The Bitburner Remote API still requires the Bitburner client to connect to:
 ws://127.0.0.1:12525
 ```
 
-If a different address is needed, tools should accept an `addr` field matching the CLI `--addr <host:port>` option.
+If a different address is needed, tools should accept an `addr` field matching the address used by `bbrs serve --addr <host:port>`.
 
 ## Planned Tools
 
@@ -37,8 +37,7 @@ Input:
   "local_dir": ".",
   "remote_dir": "scripts",
   "server": "home",
-  "addr": "127.0.0.1:12525",
-  "clean": false
+  "addr": "127.0.0.1:12525"
 }
 ```
 

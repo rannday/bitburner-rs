@@ -1,15 +1,18 @@
 use std::net::{TcpListener, TcpStream};
+use std::time::Duration;
 
+use anyhow::{Context, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tungstenite::protocol::Message;
 use tungstenite::{WebSocket, accept};
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:12525";
 pub const DEFAULT_SERVER: &str = "home";
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct JsonRpcRequest {
@@ -39,31 +42,31 @@ pub struct JsonRpcError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileMetadata {
     pub filename: String,
-    #[serde(default)]
-    pub server: Option<String>,
-    #[serde(default)]
-    pub ram: Option<f64>,
+    pub atime: String,
+    pub btime: String,
+    pub mtime: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BitburnerFile {
     pub filename: String,
-    #[serde(default)]
     pub content: String,
-    #[serde(default)]
-    pub server: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
 pub struct SaveFile {
-    pub data: Value,
+    pub identifier: String,
+    pub binary: bool,
+    pub save: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
 pub struct ServerInfo {
-    pub data: Value,
+    pub hostname: String,
+    #[serde(rename = "hasAdminRights")]
+    pub has_admin_rights: bool,
+    #[serde(rename = "purchasedByPlayer")]
+    pub purchased_by_player: bool,
 }
 
 pub struct RemoteClient {
@@ -73,26 +76,39 @@ pub struct RemoteClient {
 
 impl RemoteClient {
     pub fn listen(address: &str) -> AppResult<Self> {
-        let listener = TcpListener::bind(address)?;
+        let listener = TcpListener::bind(address)
+            .with_context(|| format!("bind websocket server on {address}"))?;
         println!("listening on {address}");
         println!("waiting for Bitburner Remote API client");
-        let (stream, peer) = listener.accept()?;
+        let (stream, peer) = listener
+            .accept()
+            .with_context(|| format!("accept websocket connection on {address}"))?;
         println!("client connected from {peer}");
-        let socket = accept(stream)
-            .map_err(|err| AppError::Remote(format!("websocket handshake failed: {err}")))?;
+        Self::from_stream(stream)
+    }
+
+    pub fn from_stream(stream: TcpStream) -> AppResult<Self> {
+        stream
+            .set_read_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
+            .context("set websocket read timeout")?;
+        stream
+            .set_write_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
+            .context("set websocket write timeout")?;
+        let socket = accept(stream).context("websocket handshake failed")?;
         println!("websocket connected");
         Ok(Self { socket, next_id: 1 })
     }
 
-    pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<Value> {
-        self.request(
+    pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<()> {
+        let result: String = self.request(
             "pushFile",
             Some(json!({
               "filename": filename,
               "content": content,
               "server": normalize_server(server),
             })),
-        )
+        )?;
+        validate_ok("pushFile", &result)
     }
 
     pub fn get_file(&mut self, server: &str, filename: &str) -> AppResult<String> {
@@ -115,14 +131,15 @@ impl RemoteClient {
         )
     }
 
-    pub fn delete_file(&mut self, server: &str, filename: &str) -> AppResult<Value> {
-        self.request(
+    pub fn delete_file(&mut self, server: &str, filename: &str) -> AppResult<()> {
+        let result: String = self.request(
             "deleteFile",
             Some(json!({
               "filename": filename,
               "server": normalize_server(server),
             })),
-        )
+        )?;
+        validate_ok("deleteFile", &result)
     }
 
     pub fn get_file_names(&mut self, server: &str) -> AppResult<Vec<String>> {
@@ -170,17 +187,8 @@ impl RemoteClient {
         self.request("getSaveFile", None)
     }
 
-    #[allow(dead_code)]
     pub fn get_all_servers(&mut self) -> AppResult<Vec<ServerInfo>> {
         self.request("getAllServers", None)
-    }
-
-    pub fn clean_server(&mut self, server: &str) -> AppResult<()> {
-        let _ = server;
-        Err(AppError::NotImplemented(
-            "clean is TODO: needs conservative delete policy on top of getFileNames/deleteFile"
-                .to_string(),
-        ))
     }
 
     pub fn build_request(&mut self, method: &str, params: Option<Value>) -> JsonRpcRequest {
@@ -200,53 +208,55 @@ impl RemoteClient {
     {
         let request = self.build_request(method, params);
         let request_id = request.id;
-        let text = serde_json::to_string(&request)?;
-        self.socket.send(Message::Text(text.into()))?;
+        let text = serde_json::to_string(&request)
+            .with_context(|| format!("serialize {method} request"))?;
+        self.socket
+            .send(Message::Text(text))
+            .with_context(|| format!("send {method} request"))?;
 
         loop {
-            let message = self.socket.read()?;
+            let message = self
+                .socket
+                .read()
+                .with_context(|| format!("{method} timed out or failed waiting for response"))?;
             let text = match message {
                 Message::Text(text) => text,
-                Message::Binary(bytes) => String::from_utf8(bytes.to_vec())
-                    .map_err(|err| {
-                        AppError::Remote(format!("invalid utf-8 websocket response: {err}"))
-                    })?
-                    .into(),
+                Message::Binary(bytes) => String::from_utf8(bytes.to_vec()).with_context(|| {
+                    format!("{method} returned invalid utf-8 websocket response")
+                })?,
                 Message::Ping(bytes) => {
-                    self.socket.send(Message::Pong(bytes))?;
+                    self.socket
+                        .send(Message::Pong(bytes))
+                        .with_context(|| format!("send pong while waiting for {method}"))?;
                     continue;
                 }
                 Message::Pong(_) => continue,
                 Message::Close(_) => {
-                    return Err(AppError::Remote(
-                        "websocket closed before response arrived".to_string(),
-                    ));
+                    bail!("websocket closed before {method} response arrived");
                 }
                 Message::Frame(_) => continue,
             };
 
-            let response: JsonRpcResponse<T> = serde_json::from_str(&text)?;
+            let response: JsonRpcResponse<T> =
+                serde_json::from_str(&text).with_context(|| format!("parse {method} response"))?;
             if response.id != request_id {
                 continue;
             }
             if response.jsonrpc != "2.0" {
-                return Err(AppError::Remote(format!(
-                    "invalid jsonrpc version '{}'",
-                    response.jsonrpc
-                )));
+                bail!("invalid jsonrpc version '{}'", response.jsonrpc);
             }
             if let Some(error) = response.error {
-                return Err(AppError::Remote(format!(
+                bail!(
                     "remote error {}: {}",
                     error
                         .code
                         .map_or_else(|| "?".to_string(), |code| code.to_string()),
                     error.message
-                )));
+                );
             }
             return response
                 .result
-                .ok_or_else(|| AppError::Remote("response missing result".to_string()));
+                .with_context(|| format!("{method} response missing result"));
         }
     }
 }
@@ -266,6 +276,14 @@ fn normalize_server(server: &str) -> &str {
         DEFAULT_SERVER
     } else {
         server
+    }
+}
+
+fn validate_ok(method: &str, result: &str) -> AppResult<()> {
+    if result == "OK" {
+        Ok(())
+    } else {
+        bail!("{method} returned unexpected result '{result}'")
     }
 }
 
@@ -320,5 +338,64 @@ mod tests {
         .expect("response");
 
         assert_eq!(response.error.expect("error").message, "bad file");
+    }
+
+    #[test]
+    fn metadata_parses_official_shape() {
+        let response: JsonRpcResponse<FileMetadata> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"filename":"a.js","atime":"1","btime":"2","mtime":"3"}}"#,
+        )
+        .expect("response");
+
+        assert_eq!(
+            response.result.expect("metadata"),
+            FileMetadata {
+                filename: "a.js".to_string(),
+                atime: "1".to_string(),
+                btime: "2".to_string(),
+                mtime: "3".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn save_file_parses_official_shape() {
+        let response: JsonRpcResponse<SaveFile> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"identifier":"bitburner","binary":false,"save":"abc"}}"#,
+        )
+        .expect("response");
+
+        assert_eq!(
+            response.result.expect("save"),
+            SaveFile {
+                identifier: "bitburner".to_string(),
+                binary: false,
+                save: "abc".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn servers_parse_official_shape() {
+        let response: JsonRpcResponse<Vec<ServerInfo>> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"result":[{"hostname":"home","hasAdminRights":true,"purchasedByPlayer":false}]}"#,
+        )
+        .expect("response");
+
+        assert_eq!(
+            response.result.expect("servers"),
+            vec![ServerInfo {
+                hostname: "home".to_string(),
+                has_admin_rights: true,
+                purchased_by_player: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn ok_result_validation_rejects_non_ok() {
+        let err = validate_ok("pushFile", "NOPE").expect_err("error");
+
+        assert!(err.to_string().contains("pushFile"));
     }
 }

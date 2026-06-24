@@ -7,54 +7,18 @@ debuggers, themes, snippets, slash commands, indexed docs providers, and MCP
 servers. They do not expose a general custom editor command/task API for an
 extension to add a "sync Bitburner" command directly.
 
-So v0.2 should not pretend to be a native command integration. The honest and
-useful Zed path is a project task that invokes the installed or local `bbrs`
-binary.
+Zed integration is deferred. The supported workflow today is `bbrs serve`
+followed by REPL commands after Bitburner connects.
 
 ## Roadmap
 
 - v0.1: CLI works.
-- v0.2: Zed task invokes `bbrs`. This is the current integration path.
+- v0.2: Define a supported Zed integration path.
 - v0.3: MCP exposes Bitburner tools to Zed Agent.
 - Future: daemon mode or IPC for repeated syncs.
 
-First useful Zed wrapper flow:
-
-```text
-bbrs sync <workspace-root> <remote-dir> --server <server> --addr <addr>
-```
-
-Zed should pass the active worktree or workspace root as `local-dir`.
-
-Manual `.zed/tasks.json` example:
-
-```json
-[
-  {
-    "label": "Bitburner: sync workspace",
-    "command": "bbrs",
-    "args": [
-      "sync",
-      "$ZED_WORKTREE_ROOT",
-      "--server",
-      "home",
-      "--addr",
-      "127.0.0.1:12525"
-    ],
-    "reveal": "always",
-    "hide": "never",
-    "allow_concurrent_runs": false,
-    "use_new_terminal": false
-  }
-]
-```
-
-Zed settings should expose:
-
-- `server`, default `home`
-- `remote_dir`, default empty
-- `addr`, default `127.0.0.1:12525`
-- `clean`, default `false`
+Do not ship a sync task example until sync has a supported non-interactive
+entrypoint or MCP integration.
 
 Later MCP flow:
 

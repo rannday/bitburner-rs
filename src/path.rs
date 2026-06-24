@@ -1,44 +1,53 @@
 use std::path::{Component, Path, PathBuf};
 
+use anyhow::bail;
+
+use crate::error::AppResult;
+
 pub fn is_uploadable_path(path: &Path) -> bool {
     let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
         return false;
     };
 
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "js" | "ts" | "txt" | "script" | "json"
-    )
+    extension.eq_ignore_ascii_case("js")
 }
 
 pub fn relative_remote_path(
     local_root: &Path,
     local_path: &Path,
     remote_dir: Option<&str>,
-) -> Option<String> {
-    let relative = local_path.strip_prefix(local_root).ok()?;
-    Some(join_remote_paths(
+) -> AppResult<Option<String>> {
+    let relative = match local_path.strip_prefix(local_root) {
+        Ok(relative) => relative,
+        Err(_) => return Ok(None),
+    };
+    Ok(Some(join_remote_paths(
         remote_dir.unwrap_or(""),
-        &path_to_forward_slashes(relative),
-    ))
+        &path_to_forward_slashes(relative)?,
+    )?))
 }
 
-pub fn path_to_forward_slashes(path: &Path) -> String {
+pub fn path_to_forward_slashes(path: &Path) -> AppResult<String> {
     let mut parts = Vec::new();
 
     for component in path.components() {
         match component {
             Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
             Component::CurDir => {}
-            _ => parts.push(component.as_os_str().to_string_lossy().to_string()),
+            Component::ParentDir => bail!("remote paths must not contain '..'"),
+            Component::RootDir | Component::Prefix(_) => bail!("remote paths must be relative"),
         }
     }
 
     normalize_remote_path(&parts.join("/"))
 }
 
-pub fn normalize_remote_path(path: &str) -> String {
+pub fn normalize_remote_path(path: &str) -> AppResult<String> {
     let replaced = path.replace('\\', "/");
+    if replaced.starts_with('/') {
+        bail!("remote paths must be relative");
+    }
+
     let mut parts = Vec::new();
 
     for part in replaced.split('/') {
@@ -46,36 +55,37 @@ pub fn normalize_remote_path(path: &str) -> String {
             continue;
         }
         if part == ".." {
-            parts.pop();
+            bail!("remote paths must not contain '..'");
         } else {
             parts.push(part);
         }
     }
 
-    parts.join("/")
+    Ok(parts.join("/"))
 }
 
-pub fn join_remote_paths(prefix: &str, path: &str) -> String {
-    let prefix = normalize_remote_path(prefix);
-    let path = normalize_remote_path(path);
+pub fn join_remote_paths(prefix: &str, path: &str) -> AppResult<String> {
+    let prefix = normalize_remote_path(prefix)?;
+    let path = normalize_remote_path(path)?;
 
-    match (prefix.is_empty(), path.is_empty()) {
+    Ok(match (prefix.is_empty(), path.is_empty()) {
         (true, true) => String::new(),
         (true, false) => path,
         (false, true) => prefix,
         (false, false) => format!("{prefix}/{path}"),
-    }
+    })
 }
 
 #[allow(dead_code)]
-pub fn remote_path_to_local(relative: &str) -> PathBuf {
+pub fn remote_path_to_local(relative: &str) -> AppResult<PathBuf> {
     let mut path = PathBuf::new();
-    for part in normalize_remote_path(relative).split('/') {
+    let normalized = normalize_remote_path(relative)?;
+    for part in normalized.split('/') {
         if !part.is_empty() {
             path.push(part);
         }
     }
-    path
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -85,10 +95,11 @@ mod tests {
     #[test]
     fn filters_uploadable_extensions() {
         assert!(is_uploadable_path(Path::new("hack.js")));
-        assert!(is_uploadable_path(Path::new("types.TS")));
-        assert!(is_uploadable_path(Path::new("note.txt")));
-        assert!(is_uploadable_path(Path::new("old.script")));
-        assert!(is_uploadable_path(Path::new("data.json")));
+        assert!(is_uploadable_path(Path::new("hack.JS")));
+        assert!(!is_uploadable_path(Path::new("types.ts")));
+        assert!(!is_uploadable_path(Path::new("note.txt")));
+        assert!(!is_uploadable_path(Path::new("old.script")));
+        assert!(!is_uploadable_path(Path::new("data.json")));
         assert!(!is_uploadable_path(Path::new("image.png")));
         assert!(!is_uploadable_path(Path::new("README")));
     }
@@ -96,13 +107,26 @@ mod tests {
     #[test]
     fn normalizes_remote_paths() {
         assert_eq!(
-            normalize_remote_path(r".\scripts\\hacking\jit-hack.js"),
+            normalize_remote_path(r".\scripts\\hacking\jit-hack.js").expect("path"),
             "scripts/hacking/jit-hack.js"
         );
         assert_eq!(
-            join_remote_paths("/scripts/", r".\hacking\jit-hack.js"),
+            join_remote_paths("scripts/", r".\hacking\jit-hack.js").expect("path"),
             "scripts/hacking/jit-hack.js"
         );
+    }
+
+    #[test]
+    fn rejects_parent_segments() {
+        assert!(normalize_remote_path("../hack.js").is_err());
+        assert!(normalize_remote_path("scripts/../hack.js").is_err());
+        assert!(join_remote_paths("scripts/..", "hack.js").is_err());
+    }
+
+    #[test]
+    fn rejects_absolute_remote_paths() {
+        assert!(normalize_remote_path("/scripts/hack.js").is_err());
+        assert!(join_remote_paths("/scripts", "hack.js").is_err());
     }
 
     #[test]
@@ -115,7 +139,7 @@ mod tests {
 
         assert_eq!(
             relative_remote_path(root, &local, Some("scripts")).expect("path"),
-            "scripts/src/hacking/jit-hack.js"
+            Some("scripts/src/hacking/jit-hack.js".to_string())
         );
     }
 
@@ -126,7 +150,7 @@ mod tests {
 
         assert_eq!(
             relative_remote_path(root, &local, None).expect("path"),
-            "src/main.js"
+            Some("src/main.js".to_string())
         );
     }
 }
