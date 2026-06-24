@@ -179,10 +179,8 @@ fn restore_or_close_connection(
         }
     };
 
-    if should_close {
-        if let Some(mut remote) = remote {
-            let _ = remote.close();
-        }
+    if should_close && let Some(mut remote) = remote {
+        let _ = remote.close();
     }
 
     Ok(())

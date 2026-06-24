@@ -61,9 +61,11 @@ where
         } => {
             let content = remote.get_file(&server, &filename)?;
             if let Some(path) = local_path {
-                std::fs::write(&path, content)
-                    .with_context(|| format!("write file '{}'", path.display()))?;
-                Ok(CommandOutput::Lines(vec![format!("Wrote {}", path.display())]))
+                write_text_file(&path, content)?;
+                Ok(CommandOutput::Lines(vec![format!(
+                    "Wrote {}",
+                    path.display()
+                )]))
             } else {
                 Ok(CommandOutput::Text(content))
             }
@@ -92,8 +94,7 @@ where
         ReplCommand::AllFiles { values } => {
             let (server, local_path) = all_files_values(values)?;
             let files = remote.get_all_files(&server)?;
-            std::fs::write(&local_path, serde_json::to_string_pretty(&files)?)
-                .with_context(|| format!("write file '{}'", local_path.display()))?;
+            write_text_file(&local_path, serde_json::to_string_pretty(&files)?)?;
             Ok(CommandOutput::Lines(vec![format!(
                 "Wrote {}",
                 local_path.display()
@@ -112,17 +113,18 @@ where
         ReplCommand::Defs { local_path } => {
             let content = remote.get_definition_file()?;
             if let Some(path) = local_path {
-                std::fs::write(&path, content)
-                    .with_context(|| format!("write file '{}'", path.display()))?;
-                Ok(CommandOutput::Lines(vec![format!("Wrote {}", path.display())]))
+                write_text_file(&path, content)?;
+                Ok(CommandOutput::Lines(vec![format!(
+                    "Wrote {}",
+                    path.display()
+                )]))
             } else {
                 Ok(CommandOutput::Text(content))
             }
         }
         ReplCommand::Save { local_path } => {
             let save = remote.get_save_file()?;
-            std::fs::write(&local_path, serde_json::to_string_pretty(&save)?)
-                .with_context(|| format!("write file '{}'", local_path.display()))?;
+            write_text_file(&local_path, serde_json::to_string_pretty(&save)?)?;
             Ok(CommandOutput::Lines(vec![format!(
                 "Wrote {}",
                 local_path.display()
@@ -226,6 +228,16 @@ fn all_files_values(values: Vec<String>) -> AppResult<(String, std::path::PathBu
     }
 }
 
+fn write_text_file(path: &std::path::Path, content: String) -> AppResult<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create directory '{}'", parent.display()))?;
+    }
+    std::fs::write(path, content).with_context(|| format!("write file '{}'", path.display()))
+}
+
 pub fn repl_help_text() -> String {
     "\
 REPL commands:
@@ -253,6 +265,8 @@ pub fn print_repl_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn empty_sync_plan_does_not_upload() {
@@ -262,5 +276,25 @@ mod tests {
     #[test]
     fn help_is_returned_as_output() {
         assert!(repl_help_text().contains("sync <server> <local-dir>"));
+    }
+
+    #[test]
+    fn write_text_file_creates_parent_directories() {
+        let root = temp_root("bbrs-cli-write");
+        let path = root.join("nested").join("out.txt");
+
+        write_text_file(&path, "content".to_string()).expect("write");
+
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "content");
+
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{name}-{stamp}"))
     }
 }
