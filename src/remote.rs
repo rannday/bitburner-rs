@@ -69,6 +69,20 @@ pub struct ServerInfo {
     pub purchased_by_player: bool,
 }
 
+pub trait BitburnerApi {
+    fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<()>;
+    fn get_file(&mut self, server: &str, filename: &str) -> AppResult<String>;
+    fn get_file_metadata(&mut self, server: &str, filename: &str) -> AppResult<FileMetadata>;
+    fn delete_file(&mut self, server: &str, filename: &str) -> AppResult<()>;
+    fn get_file_names(&mut self, server: &str) -> AppResult<Vec<String>>;
+    fn get_all_files(&mut self, server: &str) -> AppResult<Vec<BitburnerFile>>;
+    fn get_all_file_metadata(&mut self, server: &str) -> AppResult<Vec<FileMetadata>>;
+    fn calculate_ram(&mut self, server: &str, filename: &str) -> AppResult<f64>;
+    fn get_definition_file(&mut self) -> AppResult<String>;
+    fn get_save_file(&mut self) -> AppResult<SaveFile>;
+    fn get_all_servers(&mut self) -> AppResult<Vec<ServerInfo>>;
+}
+
 pub struct RemoteClient {
     socket: WebSocket<TcpStream>,
     next_id: u64,
@@ -78,12 +92,9 @@ impl RemoteClient {
     pub fn listen(address: &str) -> AppResult<Self> {
         let listener = TcpListener::bind(address)
             .with_context(|| format!("bind websocket server on {address}"))?;
-        println!("listening on {address}");
-        println!("waiting for Bitburner Remote API client");
-        let (stream, peer) = listener
+        let (stream, _) = listener
             .accept()
             .with_context(|| format!("accept websocket connection on {address}"))?;
-        println!("client connected from {peer}");
         Self::from_stream(stream)
     }
 
@@ -95,8 +106,11 @@ impl RemoteClient {
             .set_write_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
             .context("set websocket write timeout")?;
         let socket = accept(stream).context("websocket handshake failed")?;
-        println!("websocket connected");
         Ok(Self { socket, next_id: 1 })
+    }
+
+    pub fn close(&mut self) -> AppResult<()> {
+        self.socket.close(None).context("close websocket")
     }
 
     pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<()> {
@@ -258,6 +272,52 @@ impl RemoteClient {
                 .result
                 .with_context(|| format!("{method} response missing result"));
         }
+    }
+}
+
+impl BitburnerApi for RemoteClient {
+    fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<()> {
+        RemoteClient::push_file(self, server, filename, content)
+    }
+
+    fn get_file(&mut self, server: &str, filename: &str) -> AppResult<String> {
+        RemoteClient::get_file(self, server, filename)
+    }
+
+    fn get_file_metadata(&mut self, server: &str, filename: &str) -> AppResult<FileMetadata> {
+        RemoteClient::get_file_metadata(self, server, filename)
+    }
+
+    fn delete_file(&mut self, server: &str, filename: &str) -> AppResult<()> {
+        RemoteClient::delete_file(self, server, filename)
+    }
+
+    fn get_file_names(&mut self, server: &str) -> AppResult<Vec<String>> {
+        RemoteClient::get_file_names(self, server)
+    }
+
+    fn get_all_files(&mut self, server: &str) -> AppResult<Vec<BitburnerFile>> {
+        RemoteClient::get_all_files(self, server)
+    }
+
+    fn get_all_file_metadata(&mut self, server: &str) -> AppResult<Vec<FileMetadata>> {
+        RemoteClient::get_all_file_metadata(self, server)
+    }
+
+    fn calculate_ram(&mut self, server: &str, filename: &str) -> AppResult<f64> {
+        RemoteClient::calculate_ram(self, server, filename)
+    }
+
+    fn get_definition_file(&mut self) -> AppResult<String> {
+        RemoteClient::get_definition_file(self)
+    }
+
+    fn get_save_file(&mut self) -> AppResult<SaveFile> {
+        RemoteClient::get_save_file(self)
+    }
+
+    fn get_all_servers(&mut self) -> AppResult<Vec<ServerInfo>> {
+        RemoteClient::get_all_servers(self)
     }
 }
 
