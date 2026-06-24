@@ -5,7 +5,32 @@ use anyhow::Context;
 use crate::args::{self, ReplCommand, SyncOptions, TopLevelCommand};
 use crate::error::AppResult;
 use crate::fs_sync::{self, SyncItem};
-use crate::remote::{DEFAULT_SERVER, RemoteClient};
+use crate::remote::{BitburnerApi, DEFAULT_SERVER};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommandOutput {
+    Empty,
+    Text(String),
+    Lines(Vec<String>),
+}
+
+impl CommandOutput {
+    pub fn print(&self) -> AppResult<()> {
+        match self {
+            CommandOutput::Empty => Ok(()),
+            CommandOutput::Text(text) => {
+                print!("{text}");
+                io::stdout().flush().context("flush stdout")
+            }
+            CommandOutput::Lines(lines) => {
+                for line in lines {
+                    println!("{line}");
+                }
+                Ok(())
+            }
+        }
+    }
+}
 
 pub fn run() -> AppResult<()> {
     let cli = args::parse_env();
@@ -15,23 +40,20 @@ pub fn run() -> AppResult<()> {
     }
 }
 
-pub fn execute_with_client(command: ReplCommand, remote: &mut RemoteClient) -> AppResult<()> {
+pub fn execute_with_client<A>(command: ReplCommand, remote: &mut A) -> AppResult<CommandOutput>
+where
+    A: BitburnerApi + ?Sized,
+{
     match command {
-        ReplCommand::Help => {
-            print_repl_help();
-            Ok(())
-        }
+        ReplCommand::Help => Ok(CommandOutput::Text(repl_help_text())),
         ReplCommand::Servers => {
             let servers = remote.get_all_servers()?;
-            println!("{}", serde_json::to_string_pretty(&servers)?);
-            Ok(())
+            Ok(CommandOutput::Text(format!(
+                "{}\n",
+                serde_json::to_string_pretty(&servers)?
+            )))
         }
-        ReplCommand::Files { server } => {
-            for file in remote.get_file_names(&server)? {
-                println!("{file}");
-            }
-            Ok(())
-        }
+        ReplCommand::Files { server } => Ok(CommandOutput::Lines(remote.get_file_names(&server)?)),
         ReplCommand::Get {
             server,
             filename,
@@ -41,11 +63,10 @@ pub fn execute_with_client(command: ReplCommand, remote: &mut RemoteClient) -> A
             if let Some(path) = local_path {
                 std::fs::write(&path, content)
                     .with_context(|| format!("write file '{}'", path.display()))?;
+                Ok(CommandOutput::Lines(vec![format!("Wrote {}", path.display())]))
             } else {
-                print!("{content}");
-                io::stdout().flush().context("flush stdout")?;
+                Ok(CommandOutput::Text(content))
             }
-            Ok(())
         }
         ReplCommand::Push {
             server,
@@ -55,125 +76,142 @@ pub fn execute_with_client(command: ReplCommand, remote: &mut RemoteClient) -> A
             let content = std::fs::read_to_string(&local_path)
                 .with_context(|| format!("read file '{}'", local_path.display()))?;
             remote.push_file(&server, &remote_filename, &content)?;
-            println!("OK {remote_filename}");
-            Ok(())
+            Ok(CommandOutput::Lines(vec![format!("OK {remote_filename}")]))
         }
         ReplCommand::Delete { server, filename } => {
             remote.delete_file(&server, &filename)?;
-            println!("OK {filename}");
-            Ok(())
+            Ok(CommandOutput::Lines(vec![format!("OK {filename}")]))
         }
         ReplCommand::Metadata { server, filename } => {
             let metadata = remote.get_file_metadata(&server, &filename)?;
-            println!("{}", serde_json::to_string_pretty(&metadata)?);
-            Ok(())
+            Ok(CommandOutput::Text(format!(
+                "{}\n",
+                serde_json::to_string_pretty(&metadata)?
+            )))
         }
         ReplCommand::AllFiles { values } => {
             let (server, local_path) = all_files_values(values)?;
             let files = remote.get_all_files(&server)?;
             std::fs::write(&local_path, serde_json::to_string_pretty(&files)?)
                 .with_context(|| format!("write file '{}'", local_path.display()))?;
-            Ok(())
+            Ok(CommandOutput::Lines(vec![format!(
+                "Wrote {}",
+                local_path.display()
+            )]))
         }
         ReplCommand::AllMetadata { server } => {
             let metadata = remote.get_all_file_metadata(&server)?;
-            println!("{}", serde_json::to_string_pretty(&metadata)?);
-            Ok(())
+            Ok(CommandOutput::Text(format!(
+                "{}\n",
+                serde_json::to_string_pretty(&metadata)?
+            )))
         }
-        ReplCommand::Ram { server, filename } => {
-            println!("{}", remote.calculate_ram(&server, &filename)?);
-            Ok(())
-        }
+        ReplCommand::Ram { server, filename } => Ok(CommandOutput::Lines(vec![
+            remote.calculate_ram(&server, &filename)?.to_string(),
+        ])),
         ReplCommand::Defs { local_path } => {
             let content = remote.get_definition_file()?;
             if let Some(path) = local_path {
                 std::fs::write(&path, content)
                     .with_context(|| format!("write file '{}'", path.display()))?;
+                Ok(CommandOutput::Lines(vec![format!("Wrote {}", path.display())]))
             } else {
-                print!("{content}");
-                io::stdout().flush().context("flush stdout")?;
+                Ok(CommandOutput::Text(content))
             }
-            Ok(())
         }
         ReplCommand::Save { local_path } => {
             let save = remote.get_save_file()?;
             std::fs::write(&local_path, serde_json::to_string_pretty(&save)?)
                 .with_context(|| format!("write file '{}'", local_path.display()))?;
-            Ok(())
+            Ok(CommandOutput::Lines(vec![format!(
+                "Wrote {}",
+                local_path.display()
+            )]))
         }
         ReplCommand::Sync(options) => execute_sync(options, remote),
     }
 }
 
-fn execute_sync(options: SyncOptions, remote: &mut RemoteClient) -> AppResult<()> {
-    let plan = build_and_print_sync_plan(&options)?;
-    if !should_upload_sync(&plan, options.dry_run) {
-        print_dry_or_empty_sync_plan(plan, &options);
-        return Ok(());
-    }
-
-    upload_sync_plan(plan, &options, remote)
-}
-
-fn build_and_print_sync_plan(options: &SyncOptions) -> AppResult<Vec<SyncItem>> {
+fn execute_sync<A>(options: SyncOptions, remote: &mut A) -> AppResult<CommandOutput>
+where
+    A: BitburnerApi + ?Sized,
+{
     let plan = fs_sync::build_sync_plan(&options.local_dir, options.remote_dir.as_deref())?;
-    print_sync_summary(
+    let mut lines = sync_summary_lines(
         plan.len(),
         &options.local_dir,
         &options.server,
         options.remote_dir.as_deref(),
     );
-    Ok(plan)
+
+    if !should_upload_sync(&plan, options.dry_run) {
+        append_dry_or_empty_sync_plan(&mut lines, plan, &options);
+        return Ok(CommandOutput::Lines(lines));
+    }
+
+    upload_sync_plan(&mut lines, plan, &options, remote)?;
+    Ok(CommandOutput::Lines(lines))
 }
 
-fn print_dry_or_empty_sync_plan(plan: Vec<SyncItem>, options: &SyncOptions) {
+fn append_dry_or_empty_sync_plan(
+    lines: &mut Vec<String>,
+    plan: Vec<SyncItem>,
+    options: &SyncOptions,
+) {
     if plan.is_empty() {
-        println!("No uploadable .js files found.");
+        lines.push("No uploadable .js files found.".to_string());
     } else {
-        for item in plan {
-            println!(
+        lines.extend(plan.into_iter().map(|item| {
+            format!(
                 "{} -> {}:{}",
                 item.local_path.display(),
                 options.server,
                 item.remote_path
-            );
-        }
+            )
+        }));
     }
 }
 
-fn upload_sync_plan(
+fn upload_sync_plan<A>(
+    lines: &mut Vec<String>,
     plan: Vec<SyncItem>,
     options: &SyncOptions,
-    remote: &mut RemoteClient,
-) -> AppResult<()> {
+    remote: &mut A,
+) -> AppResult<()>
+where
+    A: BitburnerApi + ?Sized,
+{
     let synced = plan.len();
     for item in plan {
         let content = std::fs::read_to_string(&item.local_path)
             .with_context(|| format!("read file '{}'", item.local_path.display()))?;
         remote.push_file(&options.server, &item.remote_path, &content)?;
-        println!(
+        lines.push(format!(
             "OK {} -> {}:{}",
             item.local_path.display(),
             options.server,
             item.remote_path
-        );
+        ));
     }
-    println!("Synced {synced} file(s).");
+    lines.push(format!("Synced {synced} file(s)."));
     Ok(())
 }
 
-fn print_sync_summary(
+fn sync_summary_lines(
     file_count: usize,
     local_root: &std::path::Path,
     server: &str,
     remote_dir: Option<&str>,
-) {
-    println!("Planned files: {file_count}");
-    println!("Local root: {}", local_root.display());
-    println!("Remote server: {server}");
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("Planned files: {file_count}"),
+        format!("Local root: {}", local_root.display()),
+        format!("Remote server: {server}"),
+    ];
     if let Some(remote_dir) = remote_dir {
-        println!("Remote dir: {remote_dir}");
+        lines.push(format!("Remote dir: {remote_dir}"));
     }
+    lines
 }
 
 fn should_upload_sync(plan: &[SyncItem], dry_run: bool) -> bool {
@@ -188,9 +226,8 @@ fn all_files_values(values: Vec<String>) -> AppResult<(String, std::path::PathBu
     }
 }
 
-pub fn print_repl_help() {
-    println!(
-        "\
+pub fn repl_help_text() -> String {
+    "\
 REPL commands:
   help
   quit | exit
@@ -205,8 +242,12 @@ REPL commands:
   ram <server> <filename>
   defs [local-path]
   save <local-path>
-  sync <server> <local-dir> [remote-dir] [--dry-run]"
-    );
+  sync <server> <local-dir> [remote-dir] [--dry-run]\n"
+        .to_string()
+}
+
+pub fn print_repl_help() {
+    print!("{}", repl_help_text());
 }
 
 #[cfg(test)]
@@ -216,5 +257,10 @@ mod tests {
     #[test]
     fn empty_sync_plan_does_not_upload() {
         assert!(!should_upload_sync(&[], false));
+    }
+
+    #[test]
+    fn help_is_returned_as_output() {
+        assert!(repl_help_text().contains("sync <server> <local-dir>"));
     }
 }
