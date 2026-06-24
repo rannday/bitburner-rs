@@ -9,7 +9,6 @@ use crate::remote::{BitburnerApi, DEFAULT_SERVER};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandOutput {
-    Empty,
     Text(String),
     Lines(Vec<String>),
 }
@@ -17,7 +16,6 @@ pub enum CommandOutput {
 impl CommandOutput {
     pub fn print(&self) -> AppResult<()> {
         match self {
-            CommandOutput::Empty => Ok(()),
             CommandOutput::Text(text) => {
                 print!("{text}");
                 io::stdout().flush().context("flush stdout")

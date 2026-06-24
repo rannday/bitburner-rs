@@ -99,6 +99,7 @@ pub fn parse_env() -> Cli {
     Cli::parse()
 }
 
+#[cfg(test)]
 pub fn parse_from<I, T>(args: I) -> Result<Cli, clap::Error>
 where
     I: IntoIterator<Item = T>,
