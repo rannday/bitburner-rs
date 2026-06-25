@@ -11,11 +11,19 @@ use crate::error::AppResult;
 use crate::remote::RemoteClient;
 
 type SharedConnection = Arc<Mutex<ConnectionSlot>>;
+const REPL_PROMPT: &str = "bbrs> ";
 
 #[derive(Default)]
 struct ConnectionSlot {
     generation: u64,
     client: Option<RemoteClient>,
+}
+
+fn print_async_status(message: impl std::fmt::Display) {
+    let mut stdout = io::stdout();
+    let _ = writeln!(stdout, "\n{message}");
+    let _ = write!(stdout, "{REPL_PROMPT}");
+    let _ = stdout.flush();
 }
 
 pub fn serve(address: &str) -> AppResult<()> {
@@ -43,7 +51,7 @@ fn accept_loop(listener: TcpListener, current: SharedConnection) {
                 let peer = stream
                     .peer_addr()
                     .map_or_else(|_| "<unknown>".to_string(), |addr| addr.to_string());
-                println!("client connected from {peer}");
+                print_async_status(format_args!("client connected from {peer}"));
 
                 match RemoteClient::from_stream(stream) {
                     Ok(client) => replace_connection(&current, client),
@@ -64,7 +72,7 @@ fn replace_connection(current: &SharedConnection, client: RemoteClient) {
             slot.generation += 1;
             let previous = slot.client.take();
             if previous.is_some() {
-                println!("replacing previous Bitburner connection");
+                print_async_status("replacing previous Bitburner connection");
             }
             slot.client = Some(client);
             previous
@@ -85,7 +93,7 @@ fn repl(current: SharedConnection) -> AppResult<()> {
     let mut stdout = io::stdout();
 
     loop {
-        print!("bbrs> ");
+        print!("{REPL_PROMPT}");
         stdout.flush().context("flush prompt")?;
 
         let mut line = String::new();
