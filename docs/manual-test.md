@@ -1,9 +1,12 @@
 # Manual Bitburner Test
 
+`bitburner-cli` builds the `bbrs` command. `bitburner-api` is the reusable
+Remote API library behind it.
+
 Start the server from the repo:
 
 ```sh
-cargo run -- serve
+cargo run -p bitburner-cli -- serve
 ```
 
 Or, after installing:

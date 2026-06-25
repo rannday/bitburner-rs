@@ -1,86 +1,27 @@
 use std::net::{TcpListener, TcpStream};
-use std::time::Duration;
 
 use anyhow::{Context, bail};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tungstenite::protocol::Message;
 use tungstenite::{WebSocket, accept};
 
-use crate::error::AppResult;
-
-pub const DEFAULT_ADDRESS: &str = "127.0.0.1:12525";
-pub const DEFAULT_SERVER: &str = "home";
-pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct JsonRpcRequest {
-    pub jsonrpc: &'static str,
-    pub id: u64,
-    pub method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct JsonRpcResponse<T> {
-    pub jsonrpc: String,
-    pub id: u64,
-    pub result: Option<T>,
-    pub error: Option<JsonRpcError>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct JsonRpcError {
-    pub code: Option<i64>,
-    pub message: String,
-    #[serde(default)]
-    pub data: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FileMetadata {
-    pub filename: String,
-    pub atime: String,
-    pub btime: String,
-    pub mtime: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BitburnerFile {
-    pub filename: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SaveFile {
-    pub identifier: String,
-    pub binary: bool,
-    pub save: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ServerInfo {
-    pub hostname: String,
-    #[serde(rename = "hasAdminRights")]
-    pub has_admin_rights: bool,
-    #[serde(rename = "purchasedByPlayer")]
-    pub purchased_by_player: bool,
-}
+use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
+use crate::types::{BitburnerFile, FileMetadata, SaveFile, ServerInfo};
+use crate::{DEFAULT_REQUEST_TIMEOUT, DEFAULT_SERVER, Result};
 
 pub trait BitburnerApi {
-    fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<()>;
-    fn get_file(&mut self, server: &str, filename: &str) -> AppResult<String>;
-    fn get_file_metadata(&mut self, server: &str, filename: &str) -> AppResult<FileMetadata>;
-    fn delete_file(&mut self, server: &str, filename: &str) -> AppResult<()>;
-    fn get_file_names(&mut self, server: &str) -> AppResult<Vec<String>>;
-    fn get_all_files(&mut self, server: &str) -> AppResult<Vec<BitburnerFile>>;
-    fn get_all_file_metadata(&mut self, server: &str) -> AppResult<Vec<FileMetadata>>;
-    fn calculate_ram(&mut self, server: &str, filename: &str) -> AppResult<f64>;
-    fn get_definition_file(&mut self) -> AppResult<String>;
-    fn get_save_file(&mut self) -> AppResult<SaveFile>;
-    fn get_all_servers(&mut self) -> AppResult<Vec<ServerInfo>>;
+    fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()>;
+    fn get_file(&mut self, server: &str, filename: &str) -> Result<String>;
+    fn get_file_metadata(&mut self, server: &str, filename: &str) -> Result<FileMetadata>;
+    fn delete_file(&mut self, server: &str, filename: &str) -> Result<()>;
+    fn get_file_names(&mut self, server: &str) -> Result<Vec<String>>;
+    fn get_all_files(&mut self, server: &str) -> Result<Vec<BitburnerFile>>;
+    fn get_all_file_metadata(&mut self, server: &str) -> Result<Vec<FileMetadata>>;
+    fn calculate_ram(&mut self, server: &str, filename: &str) -> Result<f64>;
+    fn get_definition_file(&mut self) -> Result<String>;
+    fn get_save_file(&mut self) -> Result<SaveFile>;
+    fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>>;
 }
 
 pub struct RemoteClient {
@@ -89,7 +30,7 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-    pub fn listen(address: &str) -> AppResult<Self> {
+    pub fn listen(address: &str) -> Result<Self> {
         let listener = TcpListener::bind(address)
             .with_context(|| format!("bind websocket server on {address}"))?;
         let (stream, _) = listener
@@ -98,7 +39,7 @@ impl RemoteClient {
         Self::from_stream(stream)
     }
 
-    pub fn from_stream(stream: TcpStream) -> AppResult<Self> {
+    pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream
             .set_read_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
             .context("set websocket read timeout")?;
@@ -109,11 +50,11 @@ impl RemoteClient {
         Ok(Self { socket, next_id: 1 })
     }
 
-    pub fn close(&mut self) -> AppResult<()> {
+    pub fn close(&mut self) -> Result<()> {
         self.socket.close(None).context("close websocket")
     }
 
-    pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<()> {
+    pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
         let result: String = self.request(
             "pushFile",
             Some(json!({
@@ -125,7 +66,7 @@ impl RemoteClient {
         validate_ok("pushFile", &result)
     }
 
-    pub fn get_file(&mut self, server: &str, filename: &str) -> AppResult<String> {
+    pub fn get_file(&mut self, server: &str, filename: &str) -> Result<String> {
         self.request(
             "getFile",
             Some(json!({
@@ -135,7 +76,7 @@ impl RemoteClient {
         )
     }
 
-    pub fn get_file_metadata(&mut self, server: &str, filename: &str) -> AppResult<FileMetadata> {
+    pub fn get_file_metadata(&mut self, server: &str, filename: &str) -> Result<FileMetadata> {
         self.request(
             "getFileMetadata",
             Some(json!({
@@ -145,7 +86,7 @@ impl RemoteClient {
         )
     }
 
-    pub fn delete_file(&mut self, server: &str, filename: &str) -> AppResult<()> {
+    pub fn delete_file(&mut self, server: &str, filename: &str) -> Result<()> {
         let result: String = self.request(
             "deleteFile",
             Some(json!({
@@ -156,7 +97,7 @@ impl RemoteClient {
         validate_ok("deleteFile", &result)
     }
 
-    pub fn get_file_names(&mut self, server: &str) -> AppResult<Vec<String>> {
+    pub fn get_file_names(&mut self, server: &str) -> Result<Vec<String>> {
         self.request(
             "getFileNames",
             Some(json!({
@@ -165,7 +106,7 @@ impl RemoteClient {
         )
     }
 
-    pub fn get_all_files(&mut self, server: &str) -> AppResult<Vec<BitburnerFile>> {
+    pub fn get_all_files(&mut self, server: &str) -> Result<Vec<BitburnerFile>> {
         self.request(
             "getAllFiles",
             Some(json!({
@@ -174,7 +115,7 @@ impl RemoteClient {
         )
     }
 
-    pub fn get_all_file_metadata(&mut self, server: &str) -> AppResult<Vec<FileMetadata>> {
+    pub fn get_all_file_metadata(&mut self, server: &str) -> Result<Vec<FileMetadata>> {
         self.request(
             "getAllFileMetadata",
             Some(json!({
@@ -183,7 +124,7 @@ impl RemoteClient {
         )
     }
 
-    pub fn calculate_ram(&mut self, server: &str, filename: &str) -> AppResult<f64> {
+    pub fn calculate_ram(&mut self, server: &str, filename: &str) -> Result<f64> {
         self.request(
             "calculateRam",
             Some(json!({
@@ -193,15 +134,15 @@ impl RemoteClient {
         )
     }
 
-    pub fn get_definition_file(&mut self) -> AppResult<String> {
+    pub fn get_definition_file(&mut self) -> Result<String> {
         self.request("getDefinitionFile", None)
     }
 
-    pub fn get_save_file(&mut self) -> AppResult<SaveFile> {
+    pub fn get_save_file(&mut self) -> Result<SaveFile> {
         self.request("getSaveFile", None)
     }
 
-    pub fn get_all_servers(&mut self) -> AppResult<Vec<ServerInfo>> {
+    pub fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>> {
         self.request("getAllServers", None)
     }
 
@@ -216,7 +157,7 @@ impl RemoteClient {
         }
     }
 
-    pub fn request<T>(&mut self, method: &str, params: Option<Value>) -> AppResult<T>
+    pub fn request<T>(&mut self, method: &str, params: Option<Value>) -> Result<T>
     where
         T: DeserializeOwned,
     {
@@ -276,47 +217,47 @@ impl RemoteClient {
 }
 
 impl BitburnerApi for RemoteClient {
-    fn push_file(&mut self, server: &str, filename: &str, content: &str) -> AppResult<()> {
+    fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
         RemoteClient::push_file(self, server, filename, content)
     }
 
-    fn get_file(&mut self, server: &str, filename: &str) -> AppResult<String> {
+    fn get_file(&mut self, server: &str, filename: &str) -> Result<String> {
         RemoteClient::get_file(self, server, filename)
     }
 
-    fn get_file_metadata(&mut self, server: &str, filename: &str) -> AppResult<FileMetadata> {
+    fn get_file_metadata(&mut self, server: &str, filename: &str) -> Result<FileMetadata> {
         RemoteClient::get_file_metadata(self, server, filename)
     }
 
-    fn delete_file(&mut self, server: &str, filename: &str) -> AppResult<()> {
+    fn delete_file(&mut self, server: &str, filename: &str) -> Result<()> {
         RemoteClient::delete_file(self, server, filename)
     }
 
-    fn get_file_names(&mut self, server: &str) -> AppResult<Vec<String>> {
+    fn get_file_names(&mut self, server: &str) -> Result<Vec<String>> {
         RemoteClient::get_file_names(self, server)
     }
 
-    fn get_all_files(&mut self, server: &str) -> AppResult<Vec<BitburnerFile>> {
+    fn get_all_files(&mut self, server: &str) -> Result<Vec<BitburnerFile>> {
         RemoteClient::get_all_files(self, server)
     }
 
-    fn get_all_file_metadata(&mut self, server: &str) -> AppResult<Vec<FileMetadata>> {
+    fn get_all_file_metadata(&mut self, server: &str) -> Result<Vec<FileMetadata>> {
         RemoteClient::get_all_file_metadata(self, server)
     }
 
-    fn calculate_ram(&mut self, server: &str, filename: &str) -> AppResult<f64> {
+    fn calculate_ram(&mut self, server: &str, filename: &str) -> Result<f64> {
         RemoteClient::calculate_ram(self, server, filename)
     }
 
-    fn get_definition_file(&mut self) -> AppResult<String> {
+    fn get_definition_file(&mut self) -> Result<String> {
         RemoteClient::get_definition_file(self)
     }
 
-    fn get_save_file(&mut self) -> AppResult<SaveFile> {
+    fn get_save_file(&mut self) -> Result<SaveFile> {
         RemoteClient::get_save_file(self)
     }
 
-    fn get_all_servers(&mut self) -> AppResult<Vec<ServerInfo>> {
+    fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>> {
         RemoteClient::get_all_servers(self)
     }
 }
@@ -339,7 +280,7 @@ fn normalize_server(server: &str) -> &str {
     }
 }
 
-fn validate_ok(method: &str, result: &str) -> AppResult<()> {
+fn validate_ok(method: &str, result: &str) -> Result<()> {
     if result == "OK" {
         Ok(())
     } else {

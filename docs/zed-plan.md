@@ -1,6 +1,8 @@
 # Zed Integration Plan
 
-`bbrs` stays the core tool. Zed should stay a thin wrapper.
+`bitburner-api` is the reusable Remote API library. `bbrs` is the CLI built by
+`bitburner-cli`. Zed should use `bitburner-api` directly when it needs library
+access, or shell out to `bbrs` when command behavior is enough.
 
 Current Zed extension docs support extension features such as languages,
 debuggers, themes, snippets, slash commands, indexed docs providers, and MCP
@@ -28,6 +30,8 @@ bbrs mcp
 
 `bbrs mcp` will later expose sync and Remote API tools to Zed Agent through MCP. See [mcp-plan.md](mcp-plan.md).
 
-Do not make the CLI depend on Zed.
+Do not make the CLI depend on Zed. Do not make Zed integration depend on
+private `bitburner-cli` internals.
 
-Do not put Bitburner game/client scripts in this repo yet. This repo owns the Rust CLI and future editor integration.
+Do not put Bitburner game/client scripts in this repo yet. This repo owns the
+Remote API library, Rust CLI, and future editor integration.

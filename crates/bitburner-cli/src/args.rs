@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::remote::{DEFAULT_ADDRESS, DEFAULT_SERVER};
+use bitburner_api::{DEFAULT_ADDRESS, DEFAULT_SERVER};
 
 #[derive(Debug, Parser)]
 #[command(

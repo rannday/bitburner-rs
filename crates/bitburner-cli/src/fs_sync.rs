@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 
-use crate::error::AppResult;
+use crate::AppResult;
 use crate::path::{is_uploadable_path, relative_remote_path};
 
 const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[

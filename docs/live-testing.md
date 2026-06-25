@@ -2,11 +2,14 @@
 
 This checklist validates the Rust Remote API server against a real Bitburner client.
 
+`bitburner-api` provides the reusable Remote API library. `bitburner-cli` builds
+the `bbrs` command used in this checklist.
+
 ## Build
 
 ```sh
-cargo test
-cargo run -- serve
+cargo test --workspace
+cargo run -p bitburner-cli -- serve
 ```
 
 The server should print that it is listening on `127.0.0.1:12525` and waiting for Bitburner to connect.

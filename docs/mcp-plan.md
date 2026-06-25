@@ -2,11 +2,16 @@
 
 `bbrs mcp` is planned as the future Zed Agent integration path. The working product today is `bbrs serve` and its REPL commands.
 
+The workspace is split into `bitburner-api` and `bitburner-cli`. MCP should
+reuse `bitburner-api` for Remote API access and share CLI command behavior only
+through stable code paths, not private CLI internals.
+
 ## Why MCP
 
 MCP gives Zed Agent a tool interface instead of a single shell task. That should let the agent dry-run syncs, upload files, inspect Bitburner files, calculate RAM, and fetch definitions through explicit tools with structured JSON input and output.
 
-The core CLI remains the source of truth. MCP should wrap the same sync and Remote API behavior, not fork it.
+The core behavior remains the source of truth. MCP should wrap the same sync
+and Remote API behavior, not fork it.
 
 ## Server Mode
 

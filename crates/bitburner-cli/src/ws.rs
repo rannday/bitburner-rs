@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::Context;
+use bitburner_api::RemoteClient;
 
+use crate::AppResult;
 use crate::args;
 use crate::cli::{execute_with_client, print_repl_help};
-use crate::error::AppResult;
-use crate::remote::RemoteClient;
 
 type SharedConnection = Arc<Mutex<ConnectionSlot>>;
 const REPL_PROMPT: &str = "bbrs> ";

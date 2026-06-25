@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::bail;
 
-use crate::error::AppResult;
+use crate::AppResult;
 
 pub fn is_uploadable_path(path: &Path) -> bool {
     let Some(extension) = path.extension().and_then(|value| value.to_str()) else {

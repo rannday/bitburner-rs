@@ -1,11 +1,11 @@
 use std::io::{self, Write};
 
 use anyhow::Context;
+use bitburner_api::{BitburnerApi, DEFAULT_SERVER};
 
+use crate::AppResult;
 use crate::args::{self, ReplCommand, SyncOptions, TopLevelCommand};
-use crate::error::AppResult;
 use crate::fs_sync::{self, SyncItem};
-use crate::remote::{BitburnerApi, DEFAULT_SERVER};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandOutput {
