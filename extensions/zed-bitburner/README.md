@@ -2,7 +2,8 @@
 
 Thin Zed scaffold for the `bbrs` CLI.
 
-This extension does not implement sync logic.
+This extension is only a scaffold. It does not implement sync logic and is not
+wired into `bbrs serve` sync.
 
 ## Current Status
 

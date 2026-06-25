@@ -47,6 +47,9 @@ pub fn normalize_remote_path(path: &str) -> AppResult<String> {
     if replaced.starts_with('/') {
         bail!("remote paths must be relative");
     }
+    if has_windows_drive_prefix(&replaced) {
+        bail!("remote paths must be relative");
+    }
 
     let mut parts = Vec::new();
 
@@ -62,6 +65,22 @@ pub fn normalize_remote_path(path: &str) -> AppResult<String> {
     }
 
     Ok(parts.join("/"))
+}
+
+pub fn normalize_remote_file_path(path: &str) -> AppResult<String> {
+    let normalized = normalize_remote_path(path)?;
+    if normalized.is_empty() {
+        bail!("remote file path must not be empty");
+    }
+    Ok(normalized)
+}
+
+fn has_windows_drive_prefix(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(letter), Some(':'), None | Some('/')) if letter.is_ascii_alphabetic()
+    )
 }
 
 pub fn join_remote_paths(prefix: &str, path: &str) -> AppResult<String> {
@@ -127,6 +146,13 @@ mod tests {
     fn rejects_absolute_remote_paths() {
         assert!(normalize_remote_path("/scripts/hack.js").is_err());
         assert!(join_remote_paths("/scripts", "hack.js").is_err());
+        assert!(normalize_remote_path(r"C:\scripts\hack.js").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_remote_file_paths() {
+        assert!(normalize_remote_file_path("").is_err());
+        assert!(normalize_remote_file_path(".").is_err());
     }
 
     #[test]

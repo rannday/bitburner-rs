@@ -31,3 +31,5 @@ quit
 ```
 
 Sync uploads `.js` files only.
+Remote paths use forward slashes. Local Windows paths can use backslashes; quote
+local paths that contain spaces.

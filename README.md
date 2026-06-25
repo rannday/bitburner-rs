@@ -85,13 +85,29 @@ Sync uploads `.js` files only for now.
 
 It skips default generated, VCS, and editor directories:
 `.git`, `target`, `node_modules`, `dist`, `build`, `.zed`, `.vscode`, `.idea`, `coverage`, `tmp`, and `temp`.
+Ignored directory names are matched case-sensitively.
 
 Remote paths use Bitburner forward slashes. Absolute remote paths and paths containing `..` are rejected.
+
+Local paths use native OS path syntax. On Windows, unquoted local paths with
+backslashes work in the REPL:
+
+```text
+push home contracts/spiral-matrix.js C:\Users\Rann\bb\contracts\spiral-matrix.js
+get home scripts/foo.js C:\Users\Rann\out\foo.js
+sync home C:\Users\Rann\game_files scripts --dry-run
+```
+
+Quote local paths that contain spaces:
+
+```text
+push home contracts/spiral-matrix.js "C:\Users\Rann\bb contracts\spiral matrix.js"
+```
 
 ## Development
 
 ```sh
-cargo test --workspace
+cargo test --workspace --all-targets
 cargo run -p bitburner-cli -- serve
 cargo build -p bitburner-cli
 ```

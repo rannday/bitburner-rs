@@ -28,7 +28,7 @@ pub struct SyncItem {
 
 pub fn build_sync_plan(local_root: &Path, remote_dir: Option<&str>) -> AppResult<Vec<SyncItem>> {
     let metadata = fs::metadata(local_root)
-        .with_context(|| format!("read metadata for '{}'", local_root.display()))?;
+        .with_context(|| format!("read metadata for local-dir '{}'", local_root.display()))?;
     if !metadata.is_dir() {
         bail!("local-dir '{}' is not a directory", local_root.display());
     }
@@ -198,6 +198,62 @@ mod tests {
     }
 
     #[test]
+    fn build_sync_plan_allows_empty_remote_dir() {
+        let root = temp_root("bbrs-sync-empty-remote-dir");
+        create_dir_all(&root).expect("mkdir root");
+        write(root.join("main.js"), "js").expect("write");
+
+        let plan = build_sync_plan(&root, Some("")).expect("plan");
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].remote_path, "main.js");
+
+        remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn build_sync_plan_allows_dot_remote_dir() {
+        let root = temp_root("bbrs-sync-dot-remote-dir");
+        create_dir_all(&root).expect("mkdir root");
+        write(root.join("main.js"), "js").expect("write");
+
+        let plan = build_sync_plan(&root, Some(".")).expect("plan");
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].remote_path, "main.js");
+
+        remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn build_sync_plan_normalizes_trailing_slash_remote_dir() {
+        let root = temp_root("bbrs-sync-trailing-remote-dir");
+        create_dir_all(&root).expect("mkdir root");
+        write(root.join("main.js"), "js").expect("write");
+
+        let plan = build_sync_plan(&root, Some("scripts/")).expect("plan");
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].remote_path, "scripts/main.js");
+
+        remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn build_sync_plan_normalizes_backslash_remote_dir() {
+        let root = temp_root("bbrs-sync-backslash-remote-dir");
+        create_dir_all(&root).expect("mkdir root");
+        write(root.join("main.js"), "js").expect("write");
+
+        let plan = build_sync_plan(&root, Some(r"scripts\batch")).expect("plan");
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].remote_path, "scripts/batch/main.js");
+
+        remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn build_sync_plan_ignores_git_json() {
         let root = temp_root("bbrs-sync-ignore-git");
         create_dir_all(root.join(".git")).expect("mkdir git");
@@ -243,6 +299,24 @@ mod tests {
 
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].remote_path, "scripts/foo.js");
+
+        remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn build_sync_plan_matches_ignored_dirs_case_sensitively() {
+        let root = temp_root("bbrs-sync-ignore-case");
+        create_dir_all(root.join("Target")).expect("mkdir Target");
+        write(
+            root.join("Target").join("foo.js"),
+            "export async function main() {}",
+        )
+        .expect("write");
+
+        let plan = build_sync_plan(&root, None).expect("plan");
+
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].remote_path, "Target/foo.js");
 
         remove_dir_all(root).expect("cleanup");
     }

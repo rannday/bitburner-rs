@@ -8,7 +8,7 @@ the `bbrs` command used in this checklist.
 ## Build
 
 ```sh
-cargo test --workspace
+cargo test --workspace --all-targets
 cargo run -p bitburner-cli -- serve
 ```
 

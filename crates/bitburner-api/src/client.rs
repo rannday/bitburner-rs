@@ -1,4 +1,4 @@
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 
 use anyhow::{Context, bail};
 use serde::de::DeserializeOwned;
@@ -30,15 +30,6 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-    pub fn listen(address: &str) -> Result<Self> {
-        let listener = TcpListener::bind(address)
-            .with_context(|| format!("bind websocket server on {address}"))?;
-        let (stream, _) = listener
-            .accept()
-            .with_context(|| format!("accept websocket connection on {address}"))?;
-        Self::from_stream(stream)
-    }
-
     pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream
             .set_read_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
@@ -46,7 +37,9 @@ impl RemoteClient {
         stream
             .set_write_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
             .context("set websocket write timeout")?;
-        let socket = accept(stream).context("websocket handshake failed")?;
+        let socket = accept(stream).context(
+            "websocket handshake failed; check that Bitburner Remote API is connecting to this address",
+        )?;
         Ok(Self { socket, next_id: 1 })
     }
 
@@ -197,21 +190,7 @@ impl RemoteClient {
             if response.id != request_id {
                 continue;
             }
-            if response.jsonrpc != "2.0" {
-                bail!("invalid jsonrpc version '{}'", response.jsonrpc);
-            }
-            if let Some(error) = response.error {
-                bail!(
-                    "remote error {}: {}",
-                    error
-                        .code
-                        .map_or_else(|| "?".to_string(), |code| code.to_string()),
-                    error.message
-                );
-            }
-            return response
-                .result
-                .with_context(|| format!("{method} response missing result"));
+            return response_result(method, response);
         }
     }
 }
@@ -285,6 +264,31 @@ fn validate_ok(method: &str, result: &str) -> Result<()> {
         Ok(())
     } else {
         bail!("{method} returned unexpected result '{result}'")
+    }
+}
+
+fn response_result<T>(method: &str, response: JsonRpcResponse<T>) -> Result<T> {
+    if response.jsonrpc != "2.0" {
+        bail!("invalid jsonrpc version '{}'", response.jsonrpc);
+    }
+
+    match (response.result, response.error) {
+        (Some(_), Some(_)) => {
+            bail!("{method} response has both result and error");
+        }
+        (None, None) => {
+            bail!("{method} response has neither result nor error");
+        }
+        (None, Some(error)) => {
+            bail!(
+                "remote error {}: {}",
+                error
+                    .code
+                    .map_or_else(|| "?".to_string(), |code| code.to_string()),
+                error.message
+            );
+        }
+        (Some(result), None) => Ok(result),
     }
 }
 
@@ -398,5 +402,49 @@ mod tests {
         let err = validate_ok("pushFile", "NOPE").expect_err("error");
 
         assert!(err.to_string().contains("pushFile"));
+    }
+
+    #[test]
+    fn response_result_rejects_both_result_and_error() {
+        let response: JsonRpcResponse<String> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"result":"ok","error":{"code":-32000,"message":"bad"}}"#,
+        )
+        .expect("response");
+
+        let err = response_result("getFile", response).expect_err("error");
+
+        assert!(err.to_string().contains("both result and error"));
+    }
+
+    #[test]
+    fn response_result_rejects_neither_result_nor_error() {
+        let response: JsonRpcResponse<String> =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1}"#).expect("response");
+
+        let err = response_result("getFile", response).expect_err("error");
+
+        assert!(err.to_string().contains("neither result nor error"));
+    }
+
+    #[test]
+    fn response_result_rejects_invalid_jsonrpc_version() {
+        let response: JsonRpcResponse<String> =
+            serde_json::from_str(r#"{"jsonrpc":"1.0","id":1,"result":"ok"}"#).expect("response");
+
+        let err = response_result("getFile", response).expect_err("error");
+
+        assert!(err.to_string().contains("invalid jsonrpc version"));
+    }
+
+    #[test]
+    fn response_result_returns_remote_error() {
+        let response: JsonRpcResponse<String> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"bad file"}}"#,
+        )
+        .expect("response");
+
+        let err = response_result("getFile", response).expect_err("error");
+
+        assert!(err.to_string().contains("remote error -32000: bad file"));
     }
 }

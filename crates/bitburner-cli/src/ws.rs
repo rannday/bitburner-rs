@@ -55,11 +55,13 @@ fn accept_loop(listener: TcpListener, current: SharedConnection) {
 
                 match RemoteClient::from_stream(stream) {
                     Ok(client) => replace_connection(&current, client),
-                    Err(err) => eprintln!("error: {err:#}"),
+                    Err(err) => print_async_status(format_args!("error: {err:#}")),
                 }
             }
             Err(err) => {
-                eprintln!("error: accept websocket connection failed: {err}");
+                print_async_status(format_args!(
+                    "error: accept websocket connection failed: {err}"
+                ));
                 return;
             }
         }
@@ -155,7 +157,9 @@ fn take_connection(current: &SharedConnection) -> AppResult<(u64, RemoteClient)>
         .lock()
         .map_err(|_| anyhow::anyhow!("connection state mutex poisoned"))?;
     let Some(remote) = slot.client.take() else {
-        anyhow::bail!("Bitburner is not connected");
+        anyhow::bail!(
+            "Bitburner is not connected. In Bitburner, open Options -> Remote API and connect to the bbrs address."
+        );
     };
     Ok((slot.generation, remote))
 }
@@ -197,24 +201,18 @@ fn restore_or_close_connection(
 pub fn parse_repl_words(line: &str) -> AppResult<Vec<String>> {
     let mut words = Vec::new();
     let mut current = String::new();
-    let mut chars = line.chars();
+    let mut chars = line.chars().peekable();
     let mut quote: Option<char> = None;
-    let mut escaping = false;
 
-    for ch in chars.by_ref() {
-        if escaping {
-            current.push(ch);
-            escaping = false;
-            continue;
-        }
-
-        if ch == '\\' {
-            escaping = true;
-            continue;
-        }
-
+    while let Some(ch) = chars.next() {
         match quote {
             Some(quote_char) if ch == quote_char => quote = None,
+            Some(quote_char) if ch == '\\' => match chars.peek().copied() {
+                Some(next) if next == quote_char || next == '\\' => {
+                    current.push(chars.next().expect("peeked char"));
+                }
+                _ => current.push(ch),
+            },
             Some(_) => current.push(ch),
             None if ch == '"' || ch == '\'' => quote = Some(ch),
             None if ch.is_whitespace() => {
@@ -224,10 +222,6 @@ pub fn parse_repl_words(line: &str) -> AppResult<Vec<String>> {
             }
             None => current.push(ch),
         }
-    }
-
-    if escaping {
-        current.push('\\');
     }
 
     if let Some(quote_char) = quote {
@@ -269,6 +263,80 @@ mod tests {
     }
 
     #[test]
+    fn parses_unquoted_windows_push_path() {
+        assert_eq!(
+            parse_line(
+                r#"push home contracts/spiral-matrix.js C:\Users\Rann\bb\contracts\spiral-matrix.js"#
+            ),
+            ReplCommand::Push {
+                server: "home".to_string(),
+                remote_filename: "contracts/spiral-matrix.js".to_string(),
+                local_path: PathBuf::from(r"C:\Users\Rann\bb\contracts\spiral-matrix.js"),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_unquoted_windows_get_path() {
+        assert_eq!(
+            parse_line(r#"get home scripts/foo.js C:\Users\Rann\out\foo.js"#),
+            ReplCommand::Get {
+                server: "home".to_string(),
+                filename: "scripts/foo.js".to_string(),
+                local_path: Some(PathBuf::from(r"C:\Users\Rann\out\foo.js")),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_unquoted_windows_sync_path() {
+        assert_eq!(
+            parse_line(r#"sync home C:\Users\Rann\game_files scripts --dry-run"#),
+            ReplCommand::Sync(SyncOptions {
+                server: "home".to_string(),
+                local_dir: PathBuf::from(r"C:\Users\Rann\game_files"),
+                remote_dir: Some("scripts".to_string()),
+                dry_run: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_quoted_windows_path_with_spaces() {
+        assert_eq!(
+            parse_line(
+                r#"push home contracts/spiral-matrix.js "C:\Users\Rann\bb contracts\spiral matrix.js""#
+            ),
+            ReplCommand::Push {
+                server: "home".to_string(),
+                remote_filename: "contracts/spiral-matrix.js".to_string(),
+                local_path: PathBuf::from(r"C:\Users\Rann\bb contracts\spiral matrix.js"),
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_forward_slashes_in_remote_paths() {
+        assert_eq!(
+            parse_line(r#"push home old/foo.js C:\Users\Rann\foo.js"#),
+            ReplCommand::Push {
+                server: "home".to_string(),
+                remote_filename: "old/foo.js".to_string(),
+                local_path: PathBuf::from(r"C:\Users\Rann\foo.js"),
+            }
+        );
+    }
+
+    #[test]
+    fn remote_path_layer_normalizes_backslashes() {
+        assert_eq!(
+            crate::path::normalize_remote_file_path(r"contracts\spiral-matrix.js")
+                .expect("remote path"),
+            "contracts/spiral-matrix.js"
+        );
+    }
+
+    #[test]
     fn parses_quoted_get_path() {
         assert_eq!(
             parse_line(r#"get home scripts/foo.js "out path/foo.js""#),
@@ -302,10 +370,14 @@ mod tests {
     }
 
     #[test]
-    fn supports_backslash_escape() {
+    fn supports_quoted_quote_escape() {
         assert_eq!(
-            parse_repl_words(r#"files home\ server"#).expect("parse"),
-            vec!["files".to_string(), "home server".to_string()]
+            parse_repl_words(r#"get home "scripts/quo\"te.js""#).expect("parse"),
+            vec![
+                "get".to_string(),
+                "home".to_string(),
+                "scripts/quo\"te.js".to_string()
+            ]
         );
     }
 }
