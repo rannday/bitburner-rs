@@ -65,13 +65,3 @@ It skips default generated, VCS, and editor directories:
 `.git`, `target`, `node_modules`, `dist`, `build`, `.zed`, `.vscode`, `.idea`, `coverage`, `tmp`, and `temp`.
 
 Remote paths use Bitburner forward slashes. Absolute remote paths and paths containing `..` are rejected.
-
-## Windows Build Tools
-
-Rust MSVC builds need the Visual Studio C++ tools installed.
-
-If `link.exe` is found but `kernel32.lib` is missing, run `cargo` from a Developer PowerShell or through `vcvars64.bat` so the Windows SDK library paths are loaded.
-
-## Future Work
-
-Zed and MCP integration are deferred until the Rust CLI/server behavior is stable.
