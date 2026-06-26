@@ -6,7 +6,7 @@ use tungstenite::{WebSocket, accept};
 
 use crate::{BitburnerError, DEFAULT_REQUEST_TIMEOUT, JsonRpcRequest, JsonRpcResponse, Result};
 
-pub(crate) trait BitburnerTransport {
+pub trait BitburnerTransport {
     fn send_request_value(&mut self, request: JsonRpcRequest) -> Result<JsonRpcResponse<Value>>;
 }
 
@@ -15,7 +15,7 @@ pub struct NativeWebSocketTransport {
 }
 
 impl NativeWebSocketTransport {
-    pub(crate) fn from_stream(stream: TcpStream) -> Result<Self> {
+    pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream
             .set_read_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
             .map_err(|err| BitburnerError::io(format!("set websocket read timeout: {err}")))?;
@@ -30,7 +30,7 @@ impl NativeWebSocketTransport {
         Ok(Self { socket })
     }
 
-    pub(crate) fn close(&mut self) -> Result<()> {
+    pub fn close(&mut self) -> Result<()> {
         self.socket
             .close(None)
             .map_err(|err| BitburnerError::websocket(format!("close websocket: {err}")))

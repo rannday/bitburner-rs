@@ -136,21 +136,25 @@ impl BitburnerApi for RemoteClient {
     }
 }
 
-struct JsonRpcClient<T> {
+pub struct JsonRpcClient<T> {
     transport: T,
     next_id: u64,
 }
 
 impl<T> JsonRpcClient<T> {
-    fn new(transport: T) -> Self {
+    pub fn new(transport: T) -> Self {
         Self {
             transport,
             next_id: 1,
         }
     }
 
-    fn transport_mut(&mut self) -> &mut T {
+    pub fn transport_mut(&mut self) -> &mut T {
         &mut self.transport
+    }
+
+    pub fn into_transport(self) -> T {
+        self.transport
     }
 }
 
@@ -166,11 +170,17 @@ impl<T: BitburnerTransport> JsonRpcClient<T> {
         }
     }
 
-    fn request_value(&mut self, method: &str, params: Option<Value>) -> Result<Value> {
+    pub fn request_value(&mut self, method: &str, params: Option<Value>) -> Result<Value> {
         let request = self.build_request(method, params);
         let request_id = request.id;
         let response = self.transport.send_request_value(request)?;
         validate_response_value(method, request_id, response)
+    }
+}
+
+impl<T: BitburnerTransport> BitburnerApi for JsonRpcClient<T> {
+    fn request_value(&mut self, method: &str, params: Option<Value>) -> Result<Value> {
+        JsonRpcClient::request_value(self, method, params)
     }
 }
 
@@ -236,6 +246,8 @@ fn validate_response_value(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::net::TcpListener;
+    use std::thread;
 
     use super::*;
     use crate::{JsonRpcError, SaveFile, ServerInfo};
@@ -500,5 +512,22 @@ mod tests {
         let err = api.push_file("home", "a.js", "content").expect_err("error");
 
         assert!(err.to_string().contains("pushFile"));
+    }
+
+    #[test]
+    fn remote_client_is_constructible_from_tcp_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("local addr");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            RemoteClient::from_stream(stream)
+        });
+
+        let (mut socket, _) =
+            tungstenite::connect(format!("ws://{address}")).expect("client connect");
+        let mut client = server.join().expect("server join").expect("remote client");
+
+        client.close().expect("close remote client");
+        let _ = socket.close(None);
     }
 }

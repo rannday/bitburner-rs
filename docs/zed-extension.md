@@ -50,7 +50,7 @@ The extension currently uses `zed_extension_api = "0.7.0"`.
 | Slash-command APIs | Exposed for Assistant slash commands |
 
 Current Zed extension API does not expose TCP/WebSocket server or client APIs,
-so the extension cannot directly speak to Bitburner Remote API. It can call the
+so the extension cannot directly speak to Bitburner Remote API. It calls the
 local bridge exposed by `bbrs serve`:
 
 ```text
@@ -68,11 +68,38 @@ Bitburner.
 
 ## Current Extension Behavior
 
-The extension registers with Zed and implements a minimal `/bitburner`
-slash-command handler. It calls `http://127.0.0.1:12526/health` through
-`zed::http_client` and reports whether the bridge is running and whether
-Bitburner is connected. It does not upload, download, sync, or fetch
-definitions yet.
+The extension registers with Zed and implements `/bitburner` slash-command
+handling:
+
+```text
+/bitburner
+/bitburner status
+/bitburner push <worktree-path> [remote-path]
+```
+
+`/bitburner` and `/bitburner status` call
+`http://127.0.0.1:12526/health` through `zed::http_client` and report whether
+the bridge is running and whether Bitburner is connected.
+
+`/bitburner push <worktree-path> [remote-path]` reads one text file from the
+current Zed worktree and posts it to `POST /push` on the local HTTP bridge.
+When `remote-path` is omitted, the extension uploads to
+`scripts/<worktree-path>` on server `home`.
+
+Hard-coded defaults for now:
+
+```text
+bridge URL: http://127.0.0.1:12526
+server: home
+remote dir: scripts
+```
+
+Custom `bitburner.*` settings are not wired yet because this Zed API wrapper
+does not expose a generic custom-extension settings helper.
+
+The API also does not expose a general current-buffer command/action surface,
+so direct "push current file" remains a clean TODO. The slash command needs a
+worktree-relative file path.
 
 Desired future editor commands remain blocked by the current API surface:
 
@@ -127,5 +154,4 @@ Invoke-RestMethod http://127.0.0.1:12526/defs
 
 The HTTP bridge binds to loopback by default and is intended only for local
 editor/tool integration. Do not bind it to a LAN/WAN interface unless you
-understand the risk. No auth/token is implemented yet; future hardening can add
-a random local token or config file.
+understand the risk. No auth/token is implemented by design right now.

@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::thread;
 
 use anyhow::Context;
@@ -27,6 +27,9 @@ fn startup_banner(address: &str, http_address: &str) -> String {
 }
 
 pub fn serve(address: &str, http_address: &str) -> AppResult<()> {
+    warn_if_non_loopback("websocket listener", address);
+    warn_if_non_loopback("HTTP bridge", http_address);
+
     let listener = TcpListener::bind(address)
         .with_context(|| format!("bind websocket server on {address}"))?;
     let current = SharedConnection::default();
@@ -38,6 +41,35 @@ pub fn serve(address: &str, http_address: &str) -> AppResult<()> {
     thread::spawn(move || accept_loop(listener, accept_current));
 
     repl(current)
+}
+
+fn warn_if_non_loopback(label: &str, address: &str) {
+    if is_non_loopback_bind_address(address) {
+        eprintln!(
+            "warning: {label} is not bound to loopback ({address}). bbrs is intended for local use; remote clients may be able to control Bitburner files/scripts. No auth is implemented."
+        );
+    }
+}
+
+fn is_non_loopback_bind_address(address: &str) -> bool {
+    !is_loopback_bind_address(address)
+}
+
+fn is_loopback_bind_address(address: &str) -> bool {
+    if let Ok(addr) = address.parse::<SocketAddr>() {
+        return addr.ip().is_loopback();
+    }
+
+    host_from_address(address).is_some_and(|host| host.eq_ignore_ascii_case("localhost"))
+}
+
+fn host_from_address(address: &str) -> Option<&str> {
+    if let Some(rest) = address.strip_prefix('[') {
+        let (host, _) = rest.split_once(']')?;
+        return Some(host);
+    }
+
+    address.rsplit_once(':').map(|(host, _)| host)
 }
 
 fn accept_loop(listener: TcpListener, current: SharedConnection) {
@@ -65,10 +97,8 @@ fn accept_loop(listener: TcpListener, current: SharedConnection) {
 }
 
 fn replace_connection(current: &SharedConnection, client: RemoteClient) {
-    let previous = current.replace(client);
-    if let Some(mut previous) = previous {
+    if current.replace(client) {
         print_async_status("replacing previous Bitburner connection");
-        let _ = previous.close();
     }
 }
 
@@ -286,6 +316,20 @@ mod tests {
                 .expect("remote path"),
             "contracts/spiral-matrix.js"
         );
+    }
+
+    #[test]
+    fn loopback_bind_addresses_do_not_warn() {
+        assert!(!is_non_loopback_bind_address("127.0.0.1:12526"));
+        assert!(!is_non_loopback_bind_address("localhost:12526"));
+        assert!(!is_non_loopback_bind_address("[::1]:12526"));
+    }
+
+    #[test]
+    fn non_loopback_bind_addresses_warn() {
+        assert!(is_non_loopback_bind_address("0.0.0.0:12526"));
+        assert!(is_non_loopback_bind_address("[::]:12526"));
+        assert!(is_non_loopback_bind_address("192.168.1.50:12526"));
     }
 
     #[test]

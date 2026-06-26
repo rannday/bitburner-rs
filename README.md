@@ -37,6 +37,21 @@ Zed extension -> HTTP localhost -> bbrs serve -> Bitburner Remote API WebSocket
 Other future options remain process execution of `bbrs` or waiting for Zed to
 expose socket/websocket APIs.
 
+## Security Model
+
+`bbrs serve` binds both listeners to loopback by default:
+
+```text
+Bitburner WebSocket listener: 127.0.0.1:12525
+bbrs HTTP bridge:             127.0.0.1:12526
+```
+
+No HTTP auth/token support is implemented by design right now. This is a local
+tool for local editor integration. If you bind `--addr` or `--http-addr` to
+`0.0.0.0`, `[::]`, or a LAN IP, remote clients may be able to control
+Bitburner files and scripts. `bbrs serve` prints a warning for non-loopback
+binds.
+
 ## Install
 
 ```sh
@@ -144,6 +159,8 @@ POST /push
 POST /sync
 ```
 
+Full endpoint schemas and examples: [docs/http-api.md](docs/http-api.md)
+
 Manual checks:
 
 ```sh
@@ -190,8 +207,97 @@ Sync files from an editor/tool:
 
 The HTTP bridge binds to loopback by default. It is intended only for local
 editor/tool integration. Do not bind it to a LAN/WAN interface unless you
-understand the risk. No auth/token is implemented yet; future hardening can add
-a random local token or config file.
+understand the risk. No auth/token is implemented by design right now.
+
+## Common Workflows
+
+Start the bridge:
+
+```sh
+bbrs serve
+```
+
+Push one file from the REPL:
+
+```text
+push home scripts/foo.js game_files/scripts/foo.js
+```
+
+Sync a local source directory to a remote directory:
+
+```text
+sync home game_files scripts
+```
+
+Dry-run a sync:
+
+```text
+sync home game_files scripts --dry-run
+```
+
+Export definitions:
+
+```text
+defs NetscriptDefinitions.d.ts
+```
+
+Export all files from `home`:
+
+```text
+all-files home exported-home
+```
+
+## Troubleshooting
+
+Bitburner not connected:
+
+- Start `bbrs serve`.
+- In Bitburner, open `Options -> Remote API`, use host `127.0.0.1` and port
+  `12525`, then connect.
+- Check `curl http://127.0.0.1:12526/health`.
+
+Port already in use:
+
+- Pick another listener with `bbrs serve --addr 127.0.0.1:12535`.
+- Pick another HTTP bridge with `bbrs serve --http-addr 127.0.0.1:12536`.
+
+HTTP bridge unavailable:
+
+- Make sure `bbrs serve` is still running.
+- Check the exact HTTP address printed at startup.
+- If you changed `--http-addr`, update editor/tool configuration to match.
+
+Zed bridge unavailable:
+
+- Start `bbrs serve`.
+- Run `/bitburner status` in Zed.
+- The current Zed extension defaults to `http://127.0.0.1:12526`.
+
+## Zed Extension
+
+The extension keeps the `/bitburner` slash command. It supports:
+
+```text
+/bitburner
+/bitburner status
+/bitburner push <worktree-path> [remote-path]
+```
+
+Defaults are bridge URL `http://127.0.0.1:12526`, server `home`, and remote
+directory `scripts`. The current Zed API exposes HTTP fetch and worktree file
+reads, but not a general current-buffer command API, project file enumeration,
+or direct TCP/WebSocket access. Current-file sync is therefore documented as a
+future extension task instead of being faked.
+
+More detail: [docs/zed-extension.md](docs/zed-extension.md)
+
+## Roadmap
+
+- Zed sync commands when the Zed extension API exposes enough editor/project
+  context.
+- Future MCP integration using the reusable generic transport/client layer.
+- More alternate transports behind `bitburner-api`.
+- Tagged release binaries for Linux and Windows.
 
 ## Development
 

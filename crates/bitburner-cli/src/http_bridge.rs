@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::PathBuf;
 use std::thread;
 
@@ -10,11 +11,13 @@ use bitburner_api::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use url::Url;
 
 use crate::AppResult;
 use crate::connection::{SharedConnection, SharedConnectionError};
 
 pub const DEFAULT_HTTP_ADDRESS: &str = "127.0.0.1:12526";
+pub const MAX_HTTP_BODY_BYTES: u64 = 32 * 1024 * 1024;
 const DEFINITION_FILENAME: &str = "NetscriptDefinitions.d.ts";
 const NOT_CONNECTED_MESSAGE: &str = "Bitburner is not connected";
 
@@ -30,38 +33,42 @@ pub(crate) fn spawn_http_server(
 
 fn serve_http(server: Server, current: SharedConnection) {
     for request in server.incoming_requests() {
-        if let Err(err) = respond(request, &current) {
-            eprintln!("error: HTTP bridge request failed: {err:#}");
-        }
+        let current = current.clone();
+        thread::spawn(move || {
+            if let Err(err) = respond(request, &current) {
+                eprintln!("error: HTTP bridge request failed: {err:#}");
+            }
+        });
     }
 }
 
 fn respond(mut request: Request, current: &SharedConnection) -> AppResult<()> {
     let method = BridgeMethod::from_tiny(request.method());
     let target = request.url().to_string();
-    let mut body = String::new();
-    request
-        .as_reader()
-        .read_to_string(&mut body)
-        .context("read HTTP request body")?;
 
-    let bridge_response = handle_bridge_request(
-        current,
-        BridgeRequest {
-            method,
-            target,
-            body,
+    let bridge_response = match method {
+        BridgeMethod::Post => match read_limited_body(request.as_reader()) {
+            Ok(body) => handle_bridge_request(
+                current,
+                BridgeRequest {
+                    method,
+                    target,
+                    body,
+                },
+            ),
+            Err(err) => error_response(err),
         },
-    );
-    let body = serde_json::to_string(&bridge_response.body).context("encode HTTP response")?;
-    let mut response =
-        Response::from_string(body).with_status_code(StatusCode(bridge_response.status));
-    if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]) {
-        response = response.with_header(header);
-    }
-    request
-        .respond(response)
-        .map_err(|err| anyhow::anyhow!("write HTTP response: {err}"))
+        _ => handle_bridge_request(
+            current,
+            BridgeRequest {
+                method,
+                target,
+                body: String::new(),
+            },
+        ),
+    };
+
+    write_json_response(request, bridge_response)
 }
 
 trait BridgeState {
@@ -143,17 +150,32 @@ impl BridgeError {
             message: message.into(),
         }
     }
+
+    fn payload_too_large() -> Self {
+        Self {
+            status: 413,
+            message: format!("request body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
+        }
+    }
 }
 
 fn handle_bridge_request<S: BridgeState>(state: &S, request: BridgeRequest) -> BridgeResponse {
-    let (path, query) = split_target(&request.target);
+    if request.method == BridgeMethod::Post && request.body.len() as u64 > MAX_HTTP_BODY_BYTES {
+        return error_response(BridgeError::payload_too_large());
+    }
+
+    let target = parse_target(&request.target);
+    let path = target.path.as_str();
     let result = match (request.method, path) {
         (BridgeMethod::Get, "/health") => Ok(health_response(state)),
         (BridgeMethod::Get, "/servers") => bitburner_json(state, |api| {
             Ok(serde_json::to_value(api.get_all_servers()?)?)
         }),
         (BridgeMethod::Get, "/files") => {
-            let server = query_param(query, "server").unwrap_or(DEFAULT_SERVER);
+            let server = target
+                .query_param("server")
+                .filter(|server| !server.is_empty())
+                .unwrap_or(DEFAULT_SERVER);
             bitburner_json(state, |api| {
                 Ok(serde_json::to_value(api.get_file_names(server)?)?)
             })
@@ -179,10 +201,38 @@ fn handle_bridge_request<S: BridgeState>(state: &S, request: BridgeRequest) -> B
 
     match result {
         Ok(body) => BridgeResponse { status: 200, body },
-        Err(err) => BridgeResponse {
-            status: err.status,
-            body: json!({ "error": err.message }),
-        },
+        Err(err) => error_response(err),
+    }
+}
+
+fn read_limited_body(reader: &mut dyn Read) -> Result<String, BridgeError> {
+    let mut limited = reader.take(MAX_HTTP_BODY_BYTES + 1);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|err| BridgeError::internal(format!("read HTTP request body: {err}")))?;
+    if bytes.len() as u64 > MAX_HTTP_BODY_BYTES {
+        return Err(BridgeError::payload_too_large());
+    }
+    String::from_utf8(bytes).map_err(|_| BridgeError::bad_request("request body is not UTF-8"))
+}
+
+fn write_json_response(request: Request, bridge_response: BridgeResponse) -> AppResult<()> {
+    let body = serde_json::to_string(&bridge_response.body).context("encode HTTP response")?;
+    let mut response =
+        Response::from_string(body).with_status_code(StatusCode(bridge_response.status));
+    if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]) {
+        response = response.with_header(header);
+    }
+    request
+        .respond(response)
+        .map_err(|err| anyhow::anyhow!("write HTTP response: {err}"))
+}
+
+fn error_response(err: BridgeError) -> BridgeResponse {
+    BridgeResponse {
+        status: err.status,
+        body: json!({ "error": err.message }),
     }
 }
 
@@ -221,18 +271,25 @@ fn handle_sync<S: BridgeState>(state: &S, body: &str) -> Result<Value, BridgeErr
     let dry_run = request.dry_run.unwrap_or(false);
     let server = default_server(request.server.as_deref());
     let mut content_by_path = HashMap::new();
+    let mut seen_paths = HashSet::new();
     let entries = request
         .files
         .into_iter()
         .map(|file| {
             let relative_path = PathBuf::from(file.relative_path);
+            if !seen_paths.insert(relative_path.clone()) {
+                return Err(BridgeError::bad_request(format!(
+                    "duplicate sync relative_path '{}'",
+                    relative_path.to_string_lossy().replace('\\', "/")
+                )));
+            }
             content_by_path.insert(relative_path.clone(), file.content);
-            LocalFileEntry {
+            Ok(LocalFileEntry {
                 relative_path,
                 content_kind: UploadableFileKind::Text,
-            }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, BridgeError>>()?;
 
     let plan = build_sync_plan_from_entries(
         entries,
@@ -288,17 +345,34 @@ fn map_connection_error(err: SharedConnectionError) -> BridgeError {
     }
 }
 
-fn split_target(target: &str) -> (&str, Option<&str>) {
-    target
-        .split_once('?')
-        .map_or((target, None), |(path, query)| (path, Some(query)))
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedTarget {
+    path: String,
+    query: HashMap<String, String>,
 }
 
-fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
-    query?
-        .split('&')
-        .filter_map(|part| part.split_once('='))
-        .find_map(|(key, value)| (key == name && !value.is_empty()).then_some(value))
+impl ParsedTarget {
+    fn query_param(&self, name: &str) -> Option<&str> {
+        self.query.get(name).map(String::as_str)
+    }
+}
+
+fn parse_target(target: &str) -> ParsedTarget {
+    let fallback_path = target.split_once('?').map_or(target, |(path, _)| path);
+    let Ok(url) = Url::parse(&format!("http://localhost{target}")) else {
+        return ParsedTarget {
+            path: fallback_path.to_string(),
+            query: HashMap::new(),
+        };
+    };
+    let query = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<HashMap<_, _>>();
+    ParsedTarget {
+        path: url.path().to_string(),
+        query,
+    }
 }
 
 fn default_server(server: Option<&str>) -> String {
@@ -503,6 +577,17 @@ mod tests {
     }
 
     #[test]
+    fn servers_returns_json() {
+        let response = handle(&FakeState::connected(), BridgeMethod::Get, "/servers", "");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.body,
+            json!([{"hostname":"home","hasAdminRights":true,"purchasedByPlayer":true}])
+        );
+    }
+
+    #[test]
     fn files_defaults_server_to_home() {
         let state = FakeState::connected();
         let response = handle(&state, BridgeMethod::Get, "/files", "");
@@ -513,6 +598,51 @@ mod tests {
             state.api.lock().expect("api").file_name_servers,
             vec!["home".to_string()]
         );
+    }
+
+    #[test]
+    fn files_parses_home_server_query() {
+        let state = FakeState::connected();
+        let response = handle(&state, BridgeMethod::Get, "/files?server=home", "");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            state.api.lock().expect("api").file_name_servers,
+            vec!["home".to_string()]
+        );
+    }
+
+    #[test]
+    fn files_empty_server_query_defaults_to_home() {
+        let state = FakeState::connected();
+        let response = handle(&state, BridgeMethod::Get, "/files?server=", "");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            state.api.lock().expect("api").file_name_servers,
+            vec!["home".to_string()]
+        );
+    }
+
+    #[test]
+    fn files_decodes_percent_encoded_server_query() {
+        let state = FakeState::connected();
+        let response = handle(&state, BridgeMethod::Get, "/files?server=some%20server", "");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            state.api.lock().expect("api").file_name_servers,
+            vec!["some server".to_string()]
+        );
+    }
+
+    #[test]
+    fn defs_returns_filename_and_content() {
+        let response = handle(&FakeState::connected(), BridgeMethod::Get, "/defs", "");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body["filename"], DEFINITION_FILENAME);
+        assert_eq!(response.body["content"], "type NS = unknown;");
     }
 
     #[test]
@@ -558,6 +688,20 @@ mod tests {
     }
 
     #[test]
+    fn oversized_post_body_returns_413() {
+        let body = "x".repeat((MAX_HTTP_BODY_BYTES + 1) as usize);
+        let response = handle(&FakeState::connected(), BridgeMethod::Post, "/push", &body);
+
+        assert_eq!(response.status, 413);
+        assert!(
+            response.body["error"]
+                .as_str()
+                .expect("error")
+                .contains("exceeds")
+        );
+    }
+
+    #[test]
     fn sync_dry_run_returns_planned_remote_paths() {
         let response = handle(
             &FakeState::connected(),
@@ -572,6 +716,52 @@ mod tests {
             response.body["planned"],
             json!([{"relative_path":"src/hack.js","remote_path":"scripts/src/hack.js"}])
         );
+    }
+
+    #[test]
+    fn sync_uploads_planned_files() {
+        let state = FakeState::connected();
+        let response = handle(
+            &state,
+            BridgeMethod::Post,
+            "/sync",
+            r#"{"server":"home","remote_dir":"scripts","files":[{"relative_path":"src/hack.js","content":"main"}]}"#,
+        );
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body["dry_run"], false);
+        assert_eq!(
+            response.body["uploaded"],
+            json!([{"relative_path":"src/hack.js","remote_path":"scripts/src/hack.js"}])
+        );
+        assert_eq!(
+            state.api.lock().expect("api").push_calls,
+            vec![(
+                "home".to_string(),
+                "scripts/src/hack.js".to_string(),
+                "main".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn sync_rejects_duplicate_relative_paths_without_uploading() {
+        let state = FakeState::connected();
+        let response = handle(
+            &state,
+            BridgeMethod::Post,
+            "/sync",
+            r#"{"server":"home","remote_dir":"scripts","files":[{"relative_path":"src/foo.js","content":"one"},{"relative_path":"src/foo.js","content":"two"}]}"#,
+        );
+
+        assert_eq!(response.status, 400);
+        assert!(
+            response.body["error"]
+                .as_str()
+                .expect("error")
+                .contains("src/foo.js")
+        );
+        assert!(state.api.lock().expect("api").push_calls.is_empty());
     }
 
     #[test]
@@ -596,6 +786,14 @@ mod tests {
 
         assert_eq!(response.status, 404);
         assert_eq!(response.body, json!({"error":"not found"}));
+    }
+
+    #[test]
+    fn wrong_method_on_known_route_returns_405() {
+        let response = handle(&FakeState::connected(), BridgeMethod::Get, "/push", "");
+
+        assert_eq!(response.status, 405);
+        assert_eq!(response.body, json!({"error":"method not allowed"}));
     }
 
     #[test]

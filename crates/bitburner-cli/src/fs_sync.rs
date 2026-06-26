@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,10 @@ pub fn build_sync_plan(local_root: &Path, remote_dir: Option<&str>) -> AppResult
 
     let mut walk_items = Vec::new();
     visit(local_root, local_root, &mut walk_items)?;
+    let local_by_relative = walk_items
+        .iter()
+        .map(|item| (item.relative_path.clone(), item.local_path.clone()))
+        .collect::<HashMap<_, _>>();
 
     let core_plan = build_sync_plan_from_entries(
         walk_items.iter().map(|item| LocalFileEntry {
@@ -39,11 +44,10 @@ pub fn build_sync_plan(local_root: &Path, remote_dir: Option<&str>) -> AppResult
     Ok(core_plan
         .into_iter()
         .filter_map(|core_item| {
-            walk_items
-                .iter()
-                .find(|item| item.relative_path == core_item.relative_path)
-                .map(|item| SyncItem {
-                    local_path: item.local_path.clone(),
+            local_by_relative
+                .get(&core_item.relative_path)
+                .map(|local_path| SyncItem {
+                    local_path: local_path.clone(),
                     remote_path: core_item.remote_path,
                 })
         })
