@@ -2,6 +2,20 @@ use std::path::{Path, PathBuf};
 
 use crate::{Result, join_remote_paths, path_to_forward_slashes};
 
+pub const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    ".zed",
+    ".vscode",
+    ".idea",
+    "coverage",
+    "tmp",
+    "temp",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadableFileKind {
     Text,
@@ -104,6 +118,10 @@ pub fn is_uploadable_path_with_extensions(
         .any(|allowed| extension.eq_ignore_ascii_case(allowed.as_str()))
 }
 
+pub fn is_default_ignored_dir_name(name: &str) -> bool {
+    DEFAULT_IGNORED_DIR_NAMES.contains(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +144,27 @@ mod tests {
         assert!(!is_uploadable_path(Path::new("data.json")));
         assert!(!is_uploadable_path(Path::new("image.png")));
         assert!(!is_uploadable_path(Path::new("README")));
+    }
+
+    #[test]
+    fn identifies_default_ignored_dirs() {
+        for name in [
+            ".git",
+            "target",
+            "node_modules",
+            "dist",
+            "build",
+            ".zed",
+            ".vscode",
+            ".idea",
+            "coverage",
+            "tmp",
+            "temp",
+        ] {
+            assert!(is_default_ignored_dir_name(name), "{name}");
+        }
+        assert!(!is_default_ignored_dir_name("Target"));
+        assert!(!is_default_ignored_dir_name("src"));
     }
 
     #[test]

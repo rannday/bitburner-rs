@@ -2,9 +2,9 @@
 
 This checklist validates the Rust Remote API server against a real Bitburner client.
 
-`bitburner-core` provides reusable WASM-friendly protocol/path/sync logic.
-`bitburner-api` provides the native Remote API transport. `bitburner-cli`
-builds the `bbrs` command used in this checklist.
+`bitburner-api` provides reusable native protocol/types/errors/path/sync logic
+and the native Remote API transport. `bitburner-cli` builds the `bbrs` command
+used in this checklist.
 
 ## Build
 

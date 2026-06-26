@@ -11,5 +11,4 @@ crate-type = ["cdylib"]
 [workspace]
 
 [dependencies]
-bitburner-core = { path = "../../crates/bitburner-core" }
 zed_extension_api = "0.7.0"

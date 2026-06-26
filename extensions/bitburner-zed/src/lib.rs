@@ -1,9 +1,10 @@
-use bitburner_core::{DEFAULT_SERVER, SyncOptions, UploadableExtension, normalize_remote_path};
 use zed_extension_api as zed;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 12525;
+const DEFAULT_SERVER: &str = "home";
 const DEFAULT_REMOTE_DIR: &str = "scripts";
+const UPLOADABLE_EXTENSIONS: [&str; 5] = [".js", ".ts", ".txt", ".script", ".ns"];
 
 struct BitburnerExtension;
 
@@ -30,31 +31,19 @@ impl zed::Extension for BitburnerExtension {
 }
 
 fn extension_status(worktree: Option<&zed::Worktree>) -> String {
-    let remote_dir = normalize_remote_path(DEFAULT_REMOTE_DIR)
-        .unwrap_or_else(|_| DEFAULT_REMOTE_DIR.to_string());
-    let extensions = UploadableExtension::ALL
-        .iter()
-        .map(|extension| format!(".{}", extension.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let options = SyncOptions {
-        remote_dir: Some(remote_dir.clone()),
-        allowed_extensions: UploadableExtension::ALL.to_vec(),
-    };
+    let extensions = UPLOADABLE_EXTENSIONS.join(", ");
     let worktree_root = worktree.map_or_else(|| "<none>".to_string(), zed::Worktree::root_path);
 
     format!(
         "Bitburner Zed extension\n\
          server: {DEFAULT_SERVER}\n\
-         remoteDir: {remote_dir}\n\
+         remoteDir: {DEFAULT_REMOTE_DIR}\n\
          host: {DEFAULT_HOST}\n\
          port: {DEFAULT_PORT}\n\
          uploadable extensions: {extensions}\n\
          worktree: {worktree_root}\n\
-         sync planner: available through bitburner-core\n\
-         configured remote dir: {}\n\
-         remote transport: unavailable in zed_extension_api 0.7.0; no TCP or websocket API is exposed",
-        options.remote_dir.as_deref().unwrap_or("")
+         sync planner: unavailable in extension crate; bitburner-api is native-only\n\
+         remote transport: unavailable in zed_extension_api 0.7.0; no TCP or websocket API is exposed"
     )
 }
 

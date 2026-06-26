@@ -1,8 +1,7 @@
 # Manual Bitburner Test
 
-`bitburner-core` is the reusable WASM-friendly protocol/path/sync crate.
-`bitburner-api` is the native Remote API transport. `bitburner-cli` builds the
-`bbrs` command used in this checklist.
+`bitburner-api` is the reusable native protocol/path/sync/client crate.
+`bitburner-cli` builds the `bbrs` command used in this checklist.
 
 Start the server from the repo:
 

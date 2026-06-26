@@ -7,28 +7,34 @@ Rust tools for the Bitburner Remote API.
 This repository is a Cargo workspace:
 
 ```text
-crates/bitburner-core  reusable WASM-friendly protocol/types/path/sync logic
-crates/bitburner-api   native Bitburner Remote API transport/client
+crates/bitburner-api   reusable native Rust library for Bitburner Remote API
 crates/bitburner-cli   CLI application that builds the bbrs binary
 extensions/bitburner-zed Zed extension skeleton
 ```
 
-`bitburner-core` owns platform-neutral protocol structs, public data types,
-remote path validation, typed errors, abstract sync planning, and the generic
-JSON-RPC client/transport trait. It avoids native sockets and filesystem
-walking so the Zed extension can use it directly.
-
-`bitburner-api` owns the native blocking websocket/TCP Remote API client and
-depends on `bitburner-core`. Its `RemoteClient` is native-only.
+`bitburner-api` owns typed errors, protocol structs, public data types, remote
+path validation, reusable sync planning, response validation, and the native
+blocking TCP/tungstenite Remote API client. It stays separate from the CLI so a
+future MCP server, local HTTP bridge, tests, and tools can reuse it.
 
 `bitburner-cli` owns command parsing, filesystem walking, REPL behavior, and
-the `bbrs` binary.
+the `bbrs` binary. It is the app boundary and may use `anyhow`.
 
 `extensions/bitburner-zed` is the Zed extension scaffold. It stays under
 `extensions/` because it has Zed-specific metadata, WASM constraints, and a
-separate build path. It should use `bitburner-core`, not CLI internals. It
-should not depend on `bitburner-api` unless a WASM-compatible transport is
-added.
+separate build path. It does not depend on `bitburner-cli`. It currently does
+not depend on `bitburner-api` because that crate is native-only.
+
+Current Zed extension API does not expose TCP/WebSocket server or client APIs,
+so the extension cannot directly speak to Bitburner Remote API. Future practical
+paths are:
+
+1. Zed extension -> local HTTP bridge in `bbrs serve` -> Bitburner Remote API
+2. Zed extension -> process execution of `bbrs`
+3. wait for Zed to expose socket/websocket APIs
+
+Preferred future path: Zed extension -> local HTTP -> `bbrs serve` ->
+WebSocket -> Bitburner.
 
 ## Install
 
@@ -119,6 +125,8 @@ push home contracts/spiral-matrix.js "C:\Users\Rann\bb contracts\spiral matrix.j
 ## Development
 
 ```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
 cargo run -p bitburner-cli -- serve
 cargo build -p bitburner-cli

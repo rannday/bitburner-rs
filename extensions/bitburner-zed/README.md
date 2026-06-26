@@ -14,10 +14,8 @@ Zed-specific metadata, WASM constraints, and a separate check/build path.
 
 ## Current Status
 
-The extension depends on `bitburner-core` for reusable WASM-friendly
-protocol/types/path/sync/client logic. It does not depend on `bitburner-cli`,
-and it should not depend on `bitburner-api` while that crate remains
-native/blocking.
+The extension does not depend on `bitburner-cli`. It also does not depend on
+`bitburner-api` because that crate owns native blocking TCP/tungstenite code.
 
 The current `zed_extension_api` version is `0.7.0`.
 
@@ -36,8 +34,16 @@ The current `zed_extension_api` version is `0.7.0`.
 | Slash-command APIs | Exposed for Assistant slash commands |
 
 Because Zed does not expose TCP or websocket APIs here, direct Bitburner Remote
-API communication from the extension is blocked. `bitburner-core` is usable by
-the extension, but `bitburner-api` remains native-only.
+API communication from the extension is blocked.
+
+Future practical paths:
+
+1. Zed extension -> local HTTP bridge in `bbrs serve` -> Bitburner Remote API
+2. Zed extension -> process execution of `bbrs`
+3. wait for Zed to expose socket/websocket APIs
+
+Preferred future path: Zed extension -> local HTTP -> `bbrs serve` ->
+WebSocket -> Bitburner.
 
 The extension currently registers a minimal `/bitburner` slash-command handler
 that reports defaults and the transport limitation. It does not upload,

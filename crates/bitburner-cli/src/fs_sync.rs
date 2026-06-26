@@ -2,26 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use bitburner_core::{
+use bitburner_api::{
     LocalFileEntry, SyncOptions as CoreSyncOptions, UploadableFileKind,
-    build_sync_plan_from_entries, is_uploadable_path,
+    build_sync_plan_from_entries, is_default_ignored_dir_name, is_uploadable_path,
 };
 
 use crate::AppResult;
-
-const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
-    ".git",
-    "target",
-    "node_modules",
-    "dist",
-    "build",
-    ".zed",
-    ".vscode",
-    ".idea",
-    "coverage",
-    "tmp",
-    "temp",
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncItem {
@@ -82,7 +68,11 @@ fn visit(local_root: &Path, current: &Path, items: &mut Vec<WalkItem>) -> AppRes
             .with_context(|| format!("read file type for '{}'", path.display()))?;
 
         if file_type.is_dir() {
-            if is_default_ignored_dir_name(&entry.file_name()) {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(is_default_ignored_dir_name)
+            {
                 continue;
             }
             visit(local_root, &path, items)?;
@@ -105,11 +95,6 @@ fn visit(local_root: &Path, current: &Path, items: &mut Vec<WalkItem>) -> AppRes
     }
 
     Ok(())
-}
-
-fn is_default_ignored_dir_name(name: &std::ffi::OsStr) -> bool {
-    name.to_str()
-        .is_some_and(|name| DEFAULT_IGNORED_DIR_NAMES.contains(&name))
 }
 
 #[cfg(test)]

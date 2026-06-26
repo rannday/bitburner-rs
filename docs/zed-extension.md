@@ -14,23 +14,22 @@ cargo check --manifest-path extensions/bitburner-zed/Cargo.toml
 ## Architecture
 
 ```text
-crates/bitburner-core
-  WASM-friendly protocol, types, typed errors, path rules, sync planning,
-  generic JSON-RPC client, and transport trait
-
 crates/bitburner-api
-  native blocking TCP/tungstenite transport and RemoteClient wrapper
+  reusable native Rust library for Bitburner Remote API, typed errors,
+  protocol/types, path rules, sync planning, response validation, and native
+  websocket client
 
 crates/bitburner-cli
-  bbrs CLI/REPL, native filesystem walking, app-level anyhow boundary
+  bbrs CLI/REPL and future local bridge, native filesystem walking,
+  app-level anyhow boundary
 
 extensions/bitburner-zed
-  Zed extension scaffold, outside the root workspace, depends on bitburner-core
+  Zed extension scaffold, outside the root workspace
 ```
 
-The extension should use `bitburner-core` directly. It should not depend on
-`bitburner-cli` internals. It should not depend on `bitburner-api` unless that
-crate gains a WASM-compatible transport.
+The extension should not depend on `bitburner-cli` internals. It currently does
+not depend on `bitburner-api` because that crate owns native blocking
+TCP/tungstenite code.
 
 ## Zed API Capability Check
 
@@ -50,9 +49,17 @@ The extension currently uses `zed_extension_api = "0.7.0"`.
 | Language-server APIs | Exposed |
 | Slash-command APIs | Exposed for Assistant slash commands |
 
-That means `bitburner-core` is usable by the extension, but direct Bitburner
-Remote API communication from Zed remains blocked unless Zed exposes a suitable
-TCP/websocket transport API or the project adds another supported bridge.
+Current Zed extension API does not expose TCP/WebSocket server or client APIs,
+so the extension cannot directly speak to Bitburner Remote API.
+
+Future practical paths:
+
+1. Zed extension -> local HTTP bridge in `bbrs serve` -> Bitburner Remote API
+2. Zed extension -> process execution of `bbrs`
+3. wait for Zed to expose socket/websocket APIs
+
+Preferred future path: Zed extension -> local HTTP -> `bbrs serve` ->
+WebSocket -> Bitburner.
 
 ## Current Extension Behavior
 
@@ -71,8 +78,8 @@ bitburner.downloadDefinitions
 ```
 
 Do not implement these as shell-outs to `bbrs` for normal extension behavior.
-The preferred path is a Zed-compatible transport that implements
-`bitburner_core::BitburnerTransport`.
+The preferred path is a local HTTP bridge hosted by `bbrs serve`, with
+`bitburner-api` continuing to own native Remote API access.
 
 ## Manual Testing
 

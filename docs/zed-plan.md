@@ -1,12 +1,10 @@
 # Zed Integration Plan
 
-`bitburner-core` is the reusable WASM-friendly protocol/types/path/sync/client
-crate. `bitburner-api` is the native blocking Remote API transport. `bbrs` is
-the CLI built by `bitburner-cli`.
+`bitburner-api` is the reusable native protocol/types/errors/path/sync/client
+crate. `bbrs` is the CLI built by `bitburner-cli`.
 
-Zed should use `bitburner-core` directly for reusable logic. It should not
-depend on private `bitburner-cli` internals, and it should not depend on
-`bitburner-api` while that crate remains native/blocking.
+Zed should not depend on private `bitburner-cli` internals. It currently should
+not depend on `bitburner-api` because that crate is native/blocking.
 
 The extension package lives at `extensions/bitburner-zed`. It is not under
 `crates/` and is not a root workspace member because it has Zed-specific
@@ -19,8 +17,17 @@ client, project file enumeration, or general editor command/action API.
 
 Direct Bitburner Remote API communication from the Zed extension remains
 blocked until Zed exposes a suitable transport API or another supported bridge
-is added. Do not fake upload/download support and do not shell out to `bbrs` for
-normal extension behavior.
+is added. Do not fake upload/download support. Do not add shell-out behavior in
+this pass.
+
+Future practical paths:
+
+1. Zed extension -> local HTTP bridge in `bbrs serve` -> Bitburner Remote API
+2. Zed extension -> process execution of `bbrs`
+3. wait for Zed to expose socket/websocket APIs
+
+Preferred future path: Zed extension -> local HTTP -> `bbrs serve` ->
+WebSocket -> Bitburner.
 
 The supported runtime workflow today is `bbrs serve` followed by REPL commands
 after Bitburner connects. See [zed-extension.md](zed-extension.md) for the
@@ -29,7 +36,7 @@ current extension API capability notes.
 ## Roadmap
 
 - v0.1: CLI works.
-- v0.2: Keep `bitburner-core` reusable by the extension and wait for a supported transport path.
+- v0.2: Keep Zed scaffold checked while waiting for a supported bridge path.
 - v0.3: MCP exposes Bitburner tools to Zed Agent.
 - Future: daemon mode or IPC for repeated syncs.
 

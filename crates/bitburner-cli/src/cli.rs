@@ -1,8 +1,7 @@
 use std::io::{self, Write};
 
 use anyhow::Context;
-use bitburner_api::{BitburnerApi, DEFAULT_SERVER};
-use bitburner_core::normalize_remote_file_path;
+use bitburner_api::{BitburnerApi, DEFAULT_SERVER, normalize_remote_file_path};
 
 use crate::AppResult;
 use crate::args::{self, ReplCommand, SyncOptions, TopLevelCommand};
@@ -274,8 +273,10 @@ pub fn print_repl_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitburner_api::{BitburnerFile, FileMetadata, Result, SaveFile, ServerInfo};
-    use bitburner_core::BitburnerError;
+    use bitburner_api::{
+        BitburnerError, BitburnerFile, FileMetadata, Result, SaveFile, ServerInfo,
+    };
+    use serde_json::Value;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -286,6 +287,10 @@ mod tests {
     }
 
     impl BitburnerApi for FakeApi {
+        fn request_value(&mut self, _method: &str, _params: Option<Value>) -> Result<Value> {
+            unexpected("request_value")
+        }
+
         fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
             self.push_file_calls.push((
                 server.to_string(),

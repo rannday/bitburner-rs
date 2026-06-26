@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn remote_path_layer_normalizes_backslashes() {
         assert_eq!(
-            bitburner_core::normalize_remote_file_path(r"contracts\spiral-matrix.js")
+            bitburner_api::normalize_remote_file_path(r"contracts\spiral-matrix.js")
                 .expect("remote path"),
             "contracts/spiral-matrix.js"
         );
