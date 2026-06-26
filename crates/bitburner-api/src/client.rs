@@ -1,15 +1,14 @@
 use std::net::TcpStream;
 
 use bitburner_core::{
-    BitburnerError, BitburnerFile, FileMetadata, JsonRpcRequest, JsonRpcResponse, Result, SaveFile,
-    ServerInfo,
+    BitburnerClient, BitburnerError, BitburnerFile, BitburnerTransport, FileMetadata,
+    JsonRpcRequest, JsonRpcResponse, Result, SaveFile, ServerInfo,
 };
-use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tungstenite::protocol::Message;
 use tungstenite::{WebSocket, accept};
 
-use crate::{DEFAULT_REQUEST_TIMEOUT, DEFAULT_SERVER};
+use crate::DEFAULT_REQUEST_TIMEOUT;
 
 pub trait BitburnerApi {
     fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()>;
@@ -25,13 +24,12 @@ pub trait BitburnerApi {
     fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>>;
 }
 
-pub struct RemoteClient {
+pub struct NativeWebSocketTransport {
     socket: WebSocket<TcpStream>,
-    next_id: u64,
 }
 
-impl RemoteClient {
-    pub fn from_stream(stream: TcpStream) -> Result<Self> {
+impl NativeWebSocketTransport {
+    fn from_stream(stream: TcpStream) -> Result<Self> {
         stream
             .set_read_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
             .map_err(|err| BitburnerError::io(format!("set websocket read timeout: {err}")))?;
@@ -43,124 +41,19 @@ impl RemoteClient {
                 "websocket handshake failed; check that Bitburner Remote API is connecting to this address: {err}"
             ))
         })?;
-        Ok(Self { socket, next_id: 1 })
+        Ok(Self { socket })
     }
 
-    pub fn close(&mut self) -> Result<()> {
+    fn close(&mut self) -> Result<()> {
         self.socket
             .close(None)
             .map_err(|err| BitburnerError::websocket(format!("close websocket: {err}")))
     }
+}
 
-    pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
-        let result: String = self.request(
-            "pushFile",
-            Some(json!({
-              "filename": filename,
-              "content": content,
-              "server": normalize_server(server),
-            })),
-        )?;
-        validate_ok("pushFile", &result)
-    }
-
-    pub fn get_file(&mut self, server: &str, filename: &str) -> Result<String> {
-        self.request(
-            "getFile",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )
-    }
-
-    pub fn get_file_metadata(&mut self, server: &str, filename: &str) -> Result<FileMetadata> {
-        self.request(
-            "getFileMetadata",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )
-    }
-
-    pub fn delete_file(&mut self, server: &str, filename: &str) -> Result<()> {
-        let result: String = self.request(
-            "deleteFile",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )?;
-        validate_ok("deleteFile", &result)
-    }
-
-    pub fn get_file_names(&mut self, server: &str) -> Result<Vec<String>> {
-        self.request(
-            "getFileNames",
-            Some(json!({
-              "server": normalize_server(server),
-            })),
-        )
-    }
-
-    pub fn get_all_files(&mut self, server: &str) -> Result<Vec<BitburnerFile>> {
-        self.request(
-            "getAllFiles",
-            Some(json!({
-              "server": normalize_server(server),
-            })),
-        )
-    }
-
-    pub fn get_all_file_metadata(&mut self, server: &str) -> Result<Vec<FileMetadata>> {
-        self.request(
-            "getAllFileMetadata",
-            Some(json!({
-              "server": normalize_server(server),
-            })),
-        )
-    }
-
-    pub fn calculate_ram(&mut self, server: &str, filename: &str) -> Result<f64> {
-        self.request(
-            "calculateRam",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )
-    }
-
-    pub fn get_definition_file(&mut self) -> Result<String> {
-        self.request("getDefinitionFile", None)
-    }
-
-    pub fn get_save_file(&mut self) -> Result<SaveFile> {
-        self.request("getSaveFile", None)
-    }
-
-    pub fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>> {
-        self.request("getAllServers", None)
-    }
-
-    pub fn build_request(&mut self, method: &str, params: Option<Value>) -> JsonRpcRequest {
-        let id = self.next_id;
-        self.next_id += 1;
-        JsonRpcRequest {
-            jsonrpc: "2.0",
-            id,
-            method: method.to_string(),
-            params,
-        }
-    }
-
-    pub fn request<T>(&mut self, method: &str, params: Option<Value>) -> Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let request = self.build_request(method, params);
-        let request_id = request.id;
+impl BitburnerTransport for NativeWebSocketTransport {
+    fn send_request_value(&mut self, request: JsonRpcRequest) -> Result<JsonRpcResponse<Value>> {
+        let method = request.method.clone();
         let text = serde_json::to_string(&request).map_err(|err| {
             BitburnerError::invalid_protocol(format!("serialize {method} request: {err}"))
         })?;
@@ -198,11 +91,71 @@ impl RemoteClient {
                 Message::Frame(_) => continue,
             };
 
-            let response: JsonRpcResponse<T> = serde_json::from_str(&text).map_err(|err| {
+            return serde_json::from_str(&text).map_err(|err| {
                 BitburnerError::invalid_protocol(format!("parse {method} response: {err}"))
-            })?;
-            return response_result(method, request_id, response);
+            });
         }
+    }
+}
+
+pub struct RemoteClient {
+    client: BitburnerClient<NativeWebSocketTransport>,
+}
+
+impl RemoteClient {
+    pub fn from_stream(stream: TcpStream) -> Result<Self> {
+        let transport = NativeWebSocketTransport::from_stream(stream)?;
+        Ok(Self {
+            client: BitburnerClient::new(transport),
+        })
+    }
+
+    pub fn close(&mut self) -> Result<()> {
+        self.client.transport_mut().close()
+    }
+
+    pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
+        self.client.push_file(server, filename, content)
+    }
+
+    pub fn get_file(&mut self, server: &str, filename: &str) -> Result<String> {
+        self.client.get_file(server, filename)
+    }
+
+    pub fn get_file_metadata(&mut self, server: &str, filename: &str) -> Result<FileMetadata> {
+        self.client.get_file_metadata(server, filename)
+    }
+
+    pub fn delete_file(&mut self, server: &str, filename: &str) -> Result<()> {
+        self.client.delete_file(server, filename)
+    }
+
+    pub fn get_file_names(&mut self, server: &str) -> Result<Vec<String>> {
+        self.client.get_file_names(server)
+    }
+
+    pub fn get_all_files(&mut self, server: &str) -> Result<Vec<BitburnerFile>> {
+        self.client.get_all_files(server)
+    }
+
+    pub fn get_all_file_metadata(&mut self, server: &str) -> Result<Vec<FileMetadata>> {
+        self.client.get_all_file_metadata(server)
+    }
+
+    pub fn calculate_ram(&mut self, server: &str, filename: &str) -> Result<f64> {
+        self.client.calculate_ram(server, filename)
+    }
+
+    pub fn get_definition_file(&mut self) -> Result<String> {
+        self.client.get_definition_file()
+    }
+
+    pub fn get_save_file(&mut self) -> Result<SaveFile> {
+        self.client.get_save_file()
+    }
+
+    pub fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>> {
+        self.client.get_all_servers()
     }
 }
 
@@ -249,238 +202,5 @@ impl BitburnerApi for RemoteClient {
 
     fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>> {
         RemoteClient::get_all_servers(self)
-    }
-}
-
-#[cfg(test)]
-pub fn build_request_for_test(method: &str, params: Option<Value>) -> JsonRpcRequest {
-    JsonRpcRequest {
-        jsonrpc: "2.0",
-        id: 1,
-        method: method.to_string(),
-        params,
-    }
-}
-
-fn normalize_server(server: &str) -> &str {
-    if server.is_empty() {
-        DEFAULT_SERVER
-    } else {
-        server
-    }
-}
-
-fn validate_ok(method: &str, result: &str) -> Result<()> {
-    if result == "OK" {
-        Ok(())
-    } else {
-        Err(BitburnerError::invalid_protocol(format!(
-            "{method} returned unexpected result '{result}'"
-        )))
-    }
-}
-
-fn response_result<T>(method: &str, request_id: u64, response: JsonRpcResponse<T>) -> Result<T> {
-    if response.id != request_id {
-        return Err(BitburnerError::invalid_protocol(format!(
-            "{method} response id {} did not match request id {request_id}",
-            response.id
-        )));
-    }
-
-    if response.jsonrpc != "2.0" {
-        return Err(BitburnerError::invalid_protocol(format!(
-            "invalid jsonrpc version '{}'",
-            response.jsonrpc
-        )));
-    }
-
-    match (response.result, response.error) {
-        (Some(_), Some(_)) => Err(BitburnerError::invalid_protocol(format!(
-            "{method} response has both result and error"
-        ))),
-        (None, None) => Err(BitburnerError::invalid_protocol(format!(
-            "{method} response has neither result nor error"
-        ))),
-        (None, Some(error)) => Err(BitburnerError::JsonRpc(error)),
-        (Some(result), None) => Ok(result),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn request_json_uses_object_params() {
-        let request = build_request_for_test(
-            "pushFile",
-            Some(json!({
-              "filename": "scripts/main.js",
-              "content": "export async function main() {}",
-              "server": "home",
-            })),
-        );
-
-        let actual = serde_json::to_value(request).expect("json");
-
-        assert_eq!(
-            actual,
-            json!({
-              "jsonrpc": "2.0",
-              "id": 1,
-              "method": "pushFile",
-              "params": {
-                "filename": "scripts/main.js",
-                "content": "export async function main() {}",
-                "server": "home",
-              },
-            })
-        );
-    }
-
-    #[test]
-    fn response_json_parses_result() {
-        let response: JsonRpcResponse<String> =
-            serde_json::from_str(r#"{"jsonrpc":"2.0","id":7,"result":"ok"}"#).expect("response");
-
-        assert_eq!(response.jsonrpc, "2.0");
-        assert_eq!(response.id, 7);
-        assert_eq!(response.result.as_deref(), Some("ok"));
-        assert!(response.error.is_none());
-    }
-
-    #[test]
-    fn response_json_parses_error() {
-        let response: JsonRpcResponse<String> = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"bad file"}}"#,
-        )
-        .expect("response");
-
-        assert_eq!(response.error.expect("error").message, "bad file");
-    }
-
-    #[test]
-    fn metadata_parses_official_shape() {
-        let response: JsonRpcResponse<FileMetadata> = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"result":{"filename":"a.js","atime":"1","btime":"2","mtime":"3"}}"#,
-        )
-        .expect("response");
-
-        assert_eq!(
-            response.result.expect("metadata"),
-            FileMetadata {
-                filename: "a.js".to_string(),
-                atime: "1".to_string(),
-                btime: "2".to_string(),
-                mtime: "3".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn save_file_parses_official_shape() {
-        let response: JsonRpcResponse<SaveFile> = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"result":{"identifier":"bitburner","binary":false,"save":"abc"}}"#,
-        )
-        .expect("response");
-
-        assert_eq!(
-            response.result.expect("save"),
-            SaveFile {
-                identifier: "bitburner".to_string(),
-                binary: false,
-                save: "abc".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn servers_parse_official_shape() {
-        let response: JsonRpcResponse<Vec<ServerInfo>> = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"result":[{"hostname":"home","hasAdminRights":true,"purchasedByPlayer":false}]}"#,
-        )
-        .expect("response");
-
-        assert_eq!(
-            response.result.expect("servers"),
-            vec![ServerInfo {
-                hostname: "home".to_string(),
-                has_admin_rights: true,
-                purchased_by_player: false,
-            }]
-        );
-    }
-
-    #[test]
-    fn ok_result_validation_rejects_non_ok() {
-        let err = validate_ok("pushFile", "NOPE").expect_err("error");
-
-        assert!(err.to_string().contains("pushFile"));
-    }
-
-    #[test]
-    fn response_result_rejects_both_result_and_error() {
-        let response: JsonRpcResponse<String> = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"result":"ok","error":{"code":-32000,"message":"bad"}}"#,
-        )
-        .expect("response");
-
-        let err = response_result("getFile", 1, response).expect_err("error");
-
-        assert!(err.to_string().contains("both result and error"));
-    }
-
-    #[test]
-    fn response_result_rejects_neither_result_nor_error() {
-        let response: JsonRpcResponse<String> =
-            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1}"#).expect("response");
-
-        let err = response_result("getFile", 1, response).expect_err("error");
-
-        assert!(err.to_string().contains("neither result nor error"));
-    }
-
-    #[test]
-    fn response_result_rejects_invalid_jsonrpc_version() {
-        let response: JsonRpcResponse<String> =
-            serde_json::from_str(r#"{"jsonrpc":"1.0","id":1,"result":"ok"}"#).expect("response");
-
-        let err = response_result("getFile", 1, response).expect_err("error");
-
-        assert!(err.to_string().contains("invalid jsonrpc version"));
-    }
-
-    #[test]
-    fn response_result_returns_remote_error() {
-        let response: JsonRpcResponse<String> = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"bad file"}}"#,
-        )
-        .expect("response");
-
-        let err = response_result("getFile", 1, response).expect_err("error");
-
-        assert!(err.to_string().contains("remote error -32000: bad file"));
-    }
-
-    #[test]
-    fn response_result_returns_valid_result() {
-        let response: JsonRpcResponse<String> =
-            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":"ok"}"#).expect("response");
-
-        assert_eq!(
-            response_result("getFile", 1, response).expect("result"),
-            "ok"
-        );
-    }
-
-    #[test]
-    fn response_result_rejects_mismatched_id() {
-        let response: JsonRpcResponse<String> =
-            serde_json::from_str(r#"{"jsonrpc":"2.0","id":2,"result":"ok"}"#).expect("response");
-
-        let err = response_result("getFile", 1, response).expect_err("error");
-
-        assert!(err.to_string().contains("did not match request id 1"));
     }
 }

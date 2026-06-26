@@ -10,22 +10,25 @@ This repository is a Cargo workspace:
 crates/bitburner-core  reusable WASM-friendly protocol/types/path/sync logic
 crates/bitburner-api   native Bitburner Remote API transport/client
 crates/bitburner-cli   CLI application that builds the bbrs binary
-extensions/zed-bitburner Zed extension skeleton
+extensions/bitburner-zed Zed extension skeleton
 ```
 
 `bitburner-core` owns platform-neutral protocol structs, public data types,
-remote path validation, typed errors, and abstract sync planning. It avoids
-native sockets and filesystem walking so the Zed extension can use it directly.
+remote path validation, typed errors, abstract sync planning, and the generic
+JSON-RPC client/transport trait. It avoids native sockets and filesystem
+walking so the Zed extension can use it directly.
 
 `bitburner-api` owns the native blocking websocket/TCP Remote API client and
-depends on `bitburner-core`.
+depends on `bitburner-core`. Its `RemoteClient` is native-only.
 
 `bitburner-cli` owns command parsing, filesystem walking, REPL behavior, and
 the `bbrs` binary.
 
-`extensions/zed-bitburner` is a scaffold for library-based Zed work. It should
-use `bitburner-core`, not CLI internals. It should not depend on
-`bitburner-api` unless a WASM-compatible transport is added.
+`extensions/bitburner-zed` is the Zed extension scaffold. It stays under
+`extensions/` because it has Zed-specific metadata, WASM constraints, and a
+separate build path. It should use `bitburner-core`, not CLI internals. It
+should not depend on `bitburner-api` unless a WASM-compatible transport is
+added.
 
 ## Install
 
@@ -125,7 +128,7 @@ The Zed extension is intentionally not part of the root workspace yet. Check it
 separately when needed:
 
 ```sh
-cargo check --manifest-path extensions/zed-bitburner/Cargo.toml
+cargo check --manifest-path extensions/bitburner-zed/Cargo.toml
 ```
 
 Live Bitburner Remote API behavior is manual-tested; unit tests do not require

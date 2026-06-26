@@ -1,4 +1,4 @@
 /target/
 /bb-test
-/extensions/zed-bitburner/target/
-/extensions/zed-bitburner/Cargo.lock
+/extensions/bitburner-zed/target/
+/extensions/bitburner-zed/Cargo.lock
