@@ -1,8 +1,12 @@
 # Zed Integration Plan
 
-`bitburner-api` is the reusable Remote API library. `bbrs` is the CLI built by
-`bitburner-cli`. Zed should use `bitburner-api` directly when it needs library
-access, or shell out to `bbrs` when command behavior is enough.
+`bitburner-core` is the reusable WASM-friendly protocol/types/path/sync crate.
+`bitburner-api` is the native blocking Remote API transport. `bbrs` is the CLI
+built by `bitburner-cli`.
+
+Zed should use `bitburner-core` directly for reusable logic. It should not
+depend on private `bitburner-cli` internals, and it should not depend on
+`bitburner-api` while that crate remains native/blocking.
 
 Current Zed extension docs support extension features such as languages,
 debuggers, themes, snippets, slash commands, indexed docs providers, and MCP

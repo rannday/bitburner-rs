@@ -2,9 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use bitburner_core::{
+    LocalFileEntry, SyncOptions as CoreSyncOptions, UploadableFileKind,
+    build_sync_plan_from_entries, is_uploadable_path,
+};
 
 use crate::AppResult;
-use crate::path::{is_uploadable_path, relative_remote_path};
 
 const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
     ".git",
@@ -33,18 +36,41 @@ pub fn build_sync_plan(local_root: &Path, remote_dir: Option<&str>) -> AppResult
         bail!("local-dir '{}' is not a directory", local_root.display());
     }
 
-    let mut items = Vec::new();
-    visit(local_root, local_root, remote_dir, &mut items)?;
-    items.sort_by(|left, right| left.remote_path.cmp(&right.remote_path));
-    Ok(items)
+    let mut walk_items = Vec::new();
+    visit(local_root, local_root, &mut walk_items)?;
+
+    let core_plan = build_sync_plan_from_entries(
+        walk_items.iter().map(|item| LocalFileEntry {
+            relative_path: item.relative_path.clone(),
+            content_kind: UploadableFileKind::Text,
+        }),
+        &CoreSyncOptions {
+            remote_dir: remote_dir.map(str::to_string),
+            ..CoreSyncOptions::default()
+        },
+    )?;
+
+    Ok(core_plan
+        .into_iter()
+        .filter_map(|core_item| {
+            walk_items
+                .iter()
+                .find(|item| item.relative_path == core_item.relative_path)
+                .map(|item| SyncItem {
+                    local_path: item.local_path.clone(),
+                    remote_path: core_item.remote_path,
+                })
+        })
+        .collect())
 }
 
-fn visit(
-    local_root: &Path,
-    current: &Path,
-    remote_dir: Option<&str>,
-    items: &mut Vec<SyncItem>,
-) -> AppResult<()> {
+#[derive(Debug, Clone)]
+struct WalkItem {
+    local_path: PathBuf,
+    relative_path: PathBuf,
+}
+
+fn visit(local_root: &Path, current: &Path, items: &mut Vec<WalkItem>) -> AppResult<()> {
     for entry in
         fs::read_dir(current).with_context(|| format!("read directory '{}'", current.display()))?
     {
@@ -59,14 +85,21 @@ fn visit(
             if is_default_ignored_dir_name(&entry.file_name()) {
                 continue;
             }
-            visit(local_root, &path, remote_dir, items)?;
+            visit(local_root, &path, items)?;
         } else if file_type.is_file() && is_uploadable_path(&path) {
-            let Some(remote_path) = relative_remote_path(local_root, &path, remote_dir)? else {
-                continue;
-            };
-            items.push(SyncItem {
+            let relative_path = path
+                .strip_prefix(local_root)
+                .with_context(|| {
+                    format!(
+                        "calculate relative path from '{}' to '{}'",
+                        local_root.display(),
+                        path.display()
+                    )
+                })?
+                .to_path_buf();
+            items.push(WalkItem {
                 local_path: path,
-                remote_path,
+                relative_path,
             });
         }
     }
@@ -152,19 +185,29 @@ mod tests {
     }
 
     #[test]
-    fn build_sync_plan_excludes_non_js_extensions() {
-        let root = temp_root("bbrs-sync-js-only");
+    fn build_sync_plan_filters_uploadable_extensions() {
+        let root = temp_root("bbrs-sync-uploadable");
         create_dir_all(root.join("src")).expect("mkdir src");
         write(root.join("src").join("foo.js"), "js").expect("write js");
         write(root.join("src").join("foo.ts"), "ts").expect("write ts");
         write(root.join("src").join("foo.json"), "{}").expect("write json");
         write(root.join("src").join("foo.txt"), "txt").expect("write txt");
         write(root.join("src").join("foo.script"), "script").expect("write script");
+        write(root.join("src").join("foo.ns"), "ns").expect("write ns");
 
         let plan = build_sync_plan(&root, None).expect("plan");
+        let remote_paths: Vec<_> = plan.iter().map(|item| item.remote_path.as_str()).collect();
 
-        assert_eq!(plan.len(), 1);
-        assert_eq!(plan[0].remote_path, "src/foo.js");
+        assert_eq!(
+            remote_paths,
+            vec![
+                "src/foo.js",
+                "src/foo.ns",
+                "src/foo.script",
+                "src/foo.ts",
+                "src/foo.txt"
+            ]
+        );
 
         remove_dir_all(root).expect("cleanup");
     }

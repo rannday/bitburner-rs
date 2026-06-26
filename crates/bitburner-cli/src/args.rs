@@ -81,7 +81,7 @@ pub enum ReplCommand {
     Defs { local_path: Option<PathBuf> },
     /// Write the Bitburner save file JSON.
     Save { local_path: PathBuf },
-    /// Upload local .js files recursively to Bitburner.
+    /// Upload local Bitburner script/text files recursively.
     Sync(SyncOptions),
 }
 

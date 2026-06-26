@@ -1,7 +1,8 @@
 # Manual Bitburner Test
 
-`bitburner-cli` builds the `bbrs` command. `bitburner-api` is the reusable
-Remote API library behind it.
+`bitburner-core` is the reusable WASM-friendly protocol/path/sync crate.
+`bitburner-api` is the native Remote API transport. `bitburner-cli` builds the
+`bbrs` command used in this checklist.
 
 Start the server from the repo:
 
@@ -30,6 +31,6 @@ defs NetscriptDefinitions.d.ts
 quit
 ```
 
-Sync uploads `.js` files only.
+Sync uploads `.js`, `.ts`, `.txt`, `.script`, and `.ns` files.
 Remote paths use forward slashes. Local Windows paths can use backslashes; quote
 local paths that contain spaces.

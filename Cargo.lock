@@ -62,7 +62,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "bitburner-api"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "bitburner-core",
  "serde",
  "serde_json",
  "tungstenite",
@@ -74,7 +74,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitburner-api",
+ "bitburner-core",
  "clap",
+ "serde_json",
+]
+
+[[package]]
+name = "bitburner-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "serde_json",
 ]
 

@@ -2,10 +2,14 @@
 name = "zed-bitburner"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 publish = false
 
 [lib]
 crate-type = ["cdylib"]
 
+[workspace]
+
 [dependencies]
+bitburner-core = { path = "../../crates/bitburner-core" }
 zed_extension_api = "0.7.0"

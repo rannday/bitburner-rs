@@ -2,8 +2,9 @@
 
 This checklist validates the Rust Remote API server against a real Bitburner client.
 
-`bitburner-api` provides the reusable Remote API library. `bitburner-cli` builds
-the `bbrs` command used in this checklist.
+`bitburner-core` provides reusable WASM-friendly protocol/path/sync logic.
+`bitburner-api` provides the native Remote API transport. `bitburner-cli`
+builds the `bbrs` command used in this checklist.
 
 ## Build
 
@@ -46,8 +47,8 @@ Expected results:
 - `files home` lists remote filenames.
 - `defs NetscriptDefinitions.d.ts` writes the Netscript definition file locally.
 - `save save-file.json` writes the save file JSON locally.
-- `sync ... --dry-run` prints the planned `.js` uploads without modifying the game.
-- `sync ...` uploads the planned `.js` files and overwrites matching remote filenames.
+- `sync ... --dry-run` prints the planned uploads without modifying the game.
+- `sync ...` uploads the planned files and overwrites matching remote filenames.
 
 ## File round-trip test
 
@@ -92,7 +93,7 @@ Expected result: the new connection replaces the previous connection, the old we
 
 ## Notes
 
-- Sync intentionally uploads `.js` files only.
+- Sync intentionally uploads `.js`, `.ts`, `.txt`, `.script`, and `.ns` files.
 - Sync intentionally overwrites remote files with matching filenames.
 - There is no remote cleanup command. Old files are left in-game unless manually deleted.
 - The REPL executes one command at a time. Connection state is not locked while a remote command is running, so reconnects are not blocked by a long request.

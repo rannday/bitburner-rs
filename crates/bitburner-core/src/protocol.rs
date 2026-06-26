@@ -18,7 +18,7 @@ pub struct JsonRpcResponse<T> {
     pub error: Option<JsonRpcError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct JsonRpcError {
     pub code: Option<i64>,
     pub message: String,

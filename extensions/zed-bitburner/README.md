@@ -1,6 +1,6 @@
 # Bitburner Zed Extension
 
-Thin Zed scaffold for the `bbrs` CLI.
+Thin Zed scaffold for Bitburner editor integration.
 
 This extension is only a scaffold. It does not implement sync logic and is not
 wired into `bbrs serve` sync.
@@ -9,6 +9,10 @@ wired into `bbrs serve` sync.
 
 The Rust entrypoint is intentionally minimal and buildable with
 `zed_extension_api`. It only registers an extension type.
+
+The extension depends on `bitburner-core` for reusable WASM-friendly
+protocol/path/sync types. It does not depend on `bitburner-cli`, and it should
+not depend on `bitburner-api` while that crate remains native/blocking.
 
 Zed integration is deferred. Do not configure a Zed task for sync; sync is
 currently a REPL command inside `bbrs serve`, not a top-level CLI command.
@@ -27,4 +31,8 @@ currently a REPL command inside `bbrs serve`, not a top-level CLI command.
 - Future: daemon mode or IPC for repeated syncs.
 
 This crate is not added to the root Cargo workspace. Keep the CLI independent
-from Zed.
+from Zed. Check it separately from the repo root with:
+
+```sh
+cargo check --manifest-path extensions/zed-bitburner/Cargo.toml
+```

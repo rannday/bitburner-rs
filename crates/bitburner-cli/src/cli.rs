@@ -2,11 +2,11 @@ use std::io::{self, Write};
 
 use anyhow::Context;
 use bitburner_api::{BitburnerApi, DEFAULT_SERVER};
+use bitburner_core::normalize_remote_file_path;
 
 use crate::AppResult;
 use crate::args::{self, ReplCommand, SyncOptions, TopLevelCommand};
 use crate::fs_sync::{self, SyncItem};
-use crate::path::normalize_remote_file_path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandOutput {
@@ -166,7 +166,7 @@ fn append_dry_or_empty_sync_plan(
     options: &SyncOptions,
 ) {
     if plan.is_empty() {
-        lines.push("No uploadable .js files found.".to_string());
+        lines.push("No uploadable files found.".to_string());
     } else {
         lines.extend(plan.into_iter().map(|item| {
             format!(
@@ -274,7 +274,8 @@ pub fn print_repl_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitburner_api::{BitburnerFile, FileMetadata, SaveFile, ServerInfo};
+    use bitburner_api::{BitburnerFile, FileMetadata, Result, SaveFile, ServerInfo};
+    use bitburner_core::BitburnerError;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -285,7 +286,7 @@ mod tests {
     }
 
     impl BitburnerApi for FakeApi {
-        fn push_file(&mut self, server: &str, filename: &str, content: &str) -> anyhow::Result<()> {
+        fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
             self.push_file_calls.push((
                 server.to_string(),
                 filename.to_string(),
@@ -294,51 +295,53 @@ mod tests {
             Ok(())
         }
 
-        fn get_file(&mut self, server: &str, filename: &str) -> anyhow::Result<String> {
+        fn get_file(&mut self, server: &str, filename: &str) -> Result<String> {
             self.get_file_calls
                 .push((server.to_string(), filename.to_string()));
             Ok("content".to_string())
         }
 
-        fn get_file_metadata(
-            &mut self,
-            _server: &str,
-            _filename: &str,
-        ) -> anyhow::Result<FileMetadata> {
-            anyhow::bail!("unexpected get_file_metadata call")
+        fn get_file_metadata(&mut self, _server: &str, _filename: &str) -> Result<FileMetadata> {
+            unexpected("get_file_metadata")
         }
 
-        fn delete_file(&mut self, _server: &str, _filename: &str) -> anyhow::Result<()> {
-            anyhow::bail!("unexpected delete_file call")
+        fn delete_file(&mut self, _server: &str, _filename: &str) -> Result<()> {
+            unexpected("delete_file")
         }
 
-        fn get_file_names(&mut self, _server: &str) -> anyhow::Result<Vec<String>> {
-            anyhow::bail!("unexpected get_file_names call")
+        fn get_file_names(&mut self, _server: &str) -> Result<Vec<String>> {
+            unexpected("get_file_names")
         }
 
-        fn get_all_files(&mut self, _server: &str) -> anyhow::Result<Vec<BitburnerFile>> {
-            anyhow::bail!("unexpected get_all_files call")
+        fn get_all_files(&mut self, _server: &str) -> Result<Vec<BitburnerFile>> {
+            unexpected("get_all_files")
         }
 
-        fn get_all_file_metadata(&mut self, _server: &str) -> anyhow::Result<Vec<FileMetadata>> {
-            anyhow::bail!("unexpected get_all_file_metadata call")
+        fn get_all_file_metadata(&mut self, _server: &str) -> Result<Vec<FileMetadata>> {
+            unexpected("get_all_file_metadata")
         }
 
-        fn calculate_ram(&mut self, _server: &str, _filename: &str) -> anyhow::Result<f64> {
-            anyhow::bail!("unexpected calculate_ram call")
+        fn calculate_ram(&mut self, _server: &str, _filename: &str) -> Result<f64> {
+            unexpected("calculate_ram")
         }
 
-        fn get_definition_file(&mut self) -> anyhow::Result<String> {
-            anyhow::bail!("unexpected get_definition_file call")
+        fn get_definition_file(&mut self) -> Result<String> {
+            unexpected("get_definition_file")
         }
 
-        fn get_save_file(&mut self) -> anyhow::Result<SaveFile> {
-            anyhow::bail!("unexpected get_save_file call")
+        fn get_save_file(&mut self) -> Result<SaveFile> {
+            unexpected("get_save_file")
         }
 
-        fn get_all_servers(&mut self) -> anyhow::Result<Vec<ServerInfo>> {
-            anyhow::bail!("unexpected get_all_servers call")
+        fn get_all_servers(&mut self) -> Result<Vec<ServerInfo>> {
+            unexpected("get_all_servers")
         }
+    }
+
+    fn unexpected<T>(method: &str) -> Result<T> {
+        Err(BitburnerError::invalid_protocol(format!(
+            "unexpected {method} call"
+        )))
     }
 
     #[test]

@@ -1,14 +1,15 @@
 use std::net::TcpStream;
 
-use anyhow::{Context, bail};
+use bitburner_core::{
+    BitburnerError, BitburnerFile, FileMetadata, JsonRpcRequest, JsonRpcResponse, Result, SaveFile,
+    ServerInfo,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tungstenite::protocol::Message;
 use tungstenite::{WebSocket, accept};
 
-use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::types::{BitburnerFile, FileMetadata, SaveFile, ServerInfo};
-use crate::{DEFAULT_REQUEST_TIMEOUT, DEFAULT_SERVER, Result};
+use crate::{DEFAULT_REQUEST_TIMEOUT, DEFAULT_SERVER};
 
 pub trait BitburnerApi {
     fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()>;
@@ -33,18 +34,22 @@ impl RemoteClient {
     pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream
             .set_read_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
-            .context("set websocket read timeout")?;
+            .map_err(|err| BitburnerError::io(format!("set websocket read timeout: {err}")))?;
         stream
             .set_write_timeout(Some(DEFAULT_REQUEST_TIMEOUT))
-            .context("set websocket write timeout")?;
-        let socket = accept(stream).context(
-            "websocket handshake failed; check that Bitburner Remote API is connecting to this address",
-        )?;
+            .map_err(|err| BitburnerError::io(format!("set websocket write timeout: {err}")))?;
+        let socket = accept(stream).map_err(|err| {
+            BitburnerError::websocket(format!(
+                "websocket handshake failed; check that Bitburner Remote API is connecting to this address: {err}"
+            ))
+        })?;
         Ok(Self { socket, next_id: 1 })
     }
 
     pub fn close(&mut self) -> Result<()> {
-        self.socket.close(None).context("close websocket")
+        self.socket
+            .close(None)
+            .map_err(|err| BitburnerError::websocket(format!("close websocket: {err}")))
     }
 
     pub fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
@@ -156,41 +161,47 @@ impl RemoteClient {
     {
         let request = self.build_request(method, params);
         let request_id = request.id;
-        let text = serde_json::to_string(&request)
-            .with_context(|| format!("serialize {method} request"))?;
+        let text = serde_json::to_string(&request).map_err(|err| {
+            BitburnerError::invalid_protocol(format!("serialize {method} request: {err}"))
+        })?;
         self.socket
             .send(Message::Text(text))
-            .with_context(|| format!("send {method} request"))?;
+            .map_err(|err| BitburnerError::websocket(format!("send {method} request: {err}")))?;
 
         loop {
-            let message = self
-                .socket
-                .read()
-                .with_context(|| format!("{method} timed out or failed waiting for response"))?;
+            let message = self.socket.read().map_err(|err| {
+                BitburnerError::websocket(format!(
+                    "{method} timed out or failed waiting for response: {err}"
+                ))
+            })?;
             let text = match message {
                 Message::Text(text) => text,
-                Message::Binary(bytes) => String::from_utf8(bytes.to_vec()).with_context(|| {
-                    format!("{method} returned invalid utf-8 websocket response")
+                Message::Binary(bytes) => String::from_utf8(bytes.to_vec()).map_err(|err| {
+                    BitburnerError::invalid_protocol(format!(
+                        "{method} returned invalid utf-8 websocket response: {err}"
+                    ))
                 })?,
                 Message::Ping(bytes) => {
-                    self.socket
-                        .send(Message::Pong(bytes))
-                        .with_context(|| format!("send pong while waiting for {method}"))?;
+                    self.socket.send(Message::Pong(bytes)).map_err(|err| {
+                        BitburnerError::websocket(format!(
+                            "send pong while waiting for {method}: {err}"
+                        ))
+                    })?;
                     continue;
                 }
                 Message::Pong(_) => continue,
                 Message::Close(_) => {
-                    bail!("websocket closed before {method} response arrived");
+                    return Err(BitburnerError::websocket(format!(
+                        "websocket closed before {method} response arrived"
+                    )));
                 }
                 Message::Frame(_) => continue,
             };
 
-            let response: JsonRpcResponse<T> =
-                serde_json::from_str(&text).with_context(|| format!("parse {method} response"))?;
-            if response.id != request_id {
-                continue;
-            }
-            return response_result(method, response);
+            let response: JsonRpcResponse<T> = serde_json::from_str(&text).map_err(|err| {
+                BitburnerError::invalid_protocol(format!("parse {method} response: {err}"))
+            })?;
+            return response_result(method, request_id, response);
         }
     }
 }
@@ -263,31 +274,35 @@ fn validate_ok(method: &str, result: &str) -> Result<()> {
     if result == "OK" {
         Ok(())
     } else {
-        bail!("{method} returned unexpected result '{result}'")
+        Err(BitburnerError::invalid_protocol(format!(
+            "{method} returned unexpected result '{result}'"
+        )))
     }
 }
 
-fn response_result<T>(method: &str, response: JsonRpcResponse<T>) -> Result<T> {
+fn response_result<T>(method: &str, request_id: u64, response: JsonRpcResponse<T>) -> Result<T> {
+    if response.id != request_id {
+        return Err(BitburnerError::invalid_protocol(format!(
+            "{method} response id {} did not match request id {request_id}",
+            response.id
+        )));
+    }
+
     if response.jsonrpc != "2.0" {
-        bail!("invalid jsonrpc version '{}'", response.jsonrpc);
+        return Err(BitburnerError::invalid_protocol(format!(
+            "invalid jsonrpc version '{}'",
+            response.jsonrpc
+        )));
     }
 
     match (response.result, response.error) {
-        (Some(_), Some(_)) => {
-            bail!("{method} response has both result and error");
-        }
-        (None, None) => {
-            bail!("{method} response has neither result nor error");
-        }
-        (None, Some(error)) => {
-            bail!(
-                "remote error {}: {}",
-                error
-                    .code
-                    .map_or_else(|| "?".to_string(), |code| code.to_string()),
-                error.message
-            );
-        }
+        (Some(_), Some(_)) => Err(BitburnerError::invalid_protocol(format!(
+            "{method} response has both result and error"
+        ))),
+        (None, None) => Err(BitburnerError::invalid_protocol(format!(
+            "{method} response has neither result nor error"
+        ))),
+        (None, Some(error)) => Err(BitburnerError::JsonRpc(error)),
         (Some(result), None) => Ok(result),
     }
 }
@@ -411,7 +426,7 @@ mod tests {
         )
         .expect("response");
 
-        let err = response_result("getFile", response).expect_err("error");
+        let err = response_result("getFile", 1, response).expect_err("error");
 
         assert!(err.to_string().contains("both result and error"));
     }
@@ -421,7 +436,7 @@ mod tests {
         let response: JsonRpcResponse<String> =
             serde_json::from_str(r#"{"jsonrpc":"2.0","id":1}"#).expect("response");
 
-        let err = response_result("getFile", response).expect_err("error");
+        let err = response_result("getFile", 1, response).expect_err("error");
 
         assert!(err.to_string().contains("neither result nor error"));
     }
@@ -431,7 +446,7 @@ mod tests {
         let response: JsonRpcResponse<String> =
             serde_json::from_str(r#"{"jsonrpc":"1.0","id":1,"result":"ok"}"#).expect("response");
 
-        let err = response_result("getFile", response).expect_err("error");
+        let err = response_result("getFile", 1, response).expect_err("error");
 
         assert!(err.to_string().contains("invalid jsonrpc version"));
     }
@@ -443,8 +458,29 @@ mod tests {
         )
         .expect("response");
 
-        let err = response_result("getFile", response).expect_err("error");
+        let err = response_result("getFile", 1, response).expect_err("error");
 
         assert!(err.to_string().contains("remote error -32000: bad file"));
+    }
+
+    #[test]
+    fn response_result_returns_valid_result() {
+        let response: JsonRpcResponse<String> =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":"ok"}"#).expect("response");
+
+        assert_eq!(
+            response_result("getFile", 1, response).expect("result"),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn response_result_rejects_mismatched_id() {
+        let response: JsonRpcResponse<String> =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":2,"result":"ok"}"#).expect("response");
+
+        let err = response_result("getFile", 1, response).expect_err("error");
+
+        assert!(err.to_string().contains("did not match request id 1"));
     }
 }

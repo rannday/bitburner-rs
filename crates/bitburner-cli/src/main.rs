@@ -1,7 +1,6 @@
 mod args;
 mod cli;
 mod fs_sync;
-mod path;
 mod ws;
 
 type AppResult<T> = anyhow::Result<T>;

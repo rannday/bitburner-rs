@@ -7,16 +7,25 @@ Rust tools for the Bitburner Remote API.
 This repository is a Cargo workspace:
 
 ```text
-crates/bitburner-api   reusable Bitburner Remote API library
+crates/bitburner-core  reusable WASM-friendly protocol/types/path/sync logic
+crates/bitburner-api   native Bitburner Remote API transport/client
 crates/bitburner-cli   CLI application that builds the bbrs binary
+extensions/zed-bitburner Zed extension skeleton
 ```
 
-`bitburner-api` owns the Remote API client, protocol structs, public data
-types, and constants.
+`bitburner-core` owns platform-neutral protocol structs, public data types,
+remote path validation, typed errors, and abstract sync planning. It avoids
+native sockets and filesystem walking so the Zed extension can use it directly.
 
-`bitburner-cli` owns command parsing, sync planning, REPL behavior, and the
-`bbrs` binary. Future Zed integration should depend on `bitburner-api`
-directly or shell out to `bbrs`; it should not depend on CLI internals.
+`bitburner-api` owns the native blocking websocket/TCP Remote API client and
+depends on `bitburner-core`.
+
+`bitburner-cli` owns command parsing, filesystem walking, REPL behavior, and
+the `bbrs` binary.
+
+`extensions/zed-bitburner` is a scaffold for library-based Zed work. It should
+use `bitburner-core`, not CLI internals. It should not depend on
+`bitburner-api` unless a WASM-compatible transport is added.
 
 ## Install
 
@@ -81,7 +90,7 @@ sync <server> <local-dir> [remote-dir] [--dry-run]
 
 ## Sync
 
-Sync uploads `.js` files only for now.
+Sync uploads `.js`, `.ts`, `.txt`, `.script`, and `.ns` files.
 
 It skips default generated, VCS, and editor directories:
 `.git`, `target`, `node_modules`, `dist`, `build`, `.zed`, `.vscode`, `.idea`, `coverage`, `tmp`, and `temp`.
@@ -111,3 +120,13 @@ cargo test --workspace --all-targets
 cargo run -p bitburner-cli -- serve
 cargo build -p bitburner-cli
 ```
+
+The Zed extension is intentionally not part of the root workspace yet. Check it
+separately when needed:
+
+```sh
+cargo check --manifest-path extensions/zed-bitburner/Cargo.toml
+```
+
+Live Bitburner Remote API behavior is manual-tested; unit tests do not require
+a running game client.

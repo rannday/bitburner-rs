@@ -11,5 +11,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 bitburner-api.workspace = true
+bitburner-core.workspace = true
 clap.workspace = true
 serde_json.workspace = true
