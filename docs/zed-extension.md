@@ -20,8 +20,8 @@ crates/bitburner-api
   websocket client
 
 crates/bitburner-cli
-  bbrs CLI/REPL and future local bridge, native filesystem walking,
-  app-level anyhow boundary
+  bbrs CLI/REPL and local HTTP bridge, native filesystem walking, app-level
+  anyhow boundary
 
 extensions/bitburner-zed
   Zed extension scaffold, outside the root workspace
@@ -50,23 +50,29 @@ The extension currently uses `zed_extension_api = "0.7.0"`.
 | Slash-command APIs | Exposed for Assistant slash commands |
 
 Current Zed extension API does not expose TCP/WebSocket server or client APIs,
-so the extension cannot directly speak to Bitburner Remote API.
+so the extension cannot directly speak to Bitburner Remote API. It can call the
+local bridge exposed by `bbrs serve`:
+
+```text
+Zed extension -> HTTP localhost -> bbrs serve -> Bitburner Remote API WebSocket
+```
 
 Future practical paths:
 
-1. Zed extension -> local HTTP bridge in `bbrs serve` -> Bitburner Remote API
+1. continue expanding the local HTTP bridge in `bbrs serve`
 2. Zed extension -> process execution of `bbrs`
 3. wait for Zed to expose socket/websocket APIs
 
-Preferred future path: Zed extension -> local HTTP -> `bbrs serve` ->
-WebSocket -> Bitburner.
+Preferred path: Zed extension -> local HTTP -> `bbrs serve` -> WebSocket ->
+Bitburner.
 
 ## Current Extension Behavior
 
 The extension registers with Zed and implements a minimal `/bitburner`
-slash-command handler. It reports configured defaults and clearly says remote
-transport is unavailable. It does not claim upload, download, sync, or
-definition download works.
+slash-command handler. It calls `http://127.0.0.1:12526/health` through
+`zed::http_client` and reports whether the bridge is running and whether
+Bitburner is connected. It does not upload, download, sync, or fetch
+definitions yet.
 
 Desired future editor commands remain blocked by the current API surface:
 
@@ -78,7 +84,7 @@ bitburner.downloadDefinitions
 ```
 
 Do not implement these as shell-outs to `bbrs` for normal extension behavior.
-The preferred path is a local HTTP bridge hosted by `bbrs serve`, with
+The preferred path is the local HTTP bridge hosted by `bbrs serve`, with
 `bitburner-api` continuing to own native Remote API access.
 
 ## Manual Testing
@@ -98,3 +104,28 @@ cargo run -p bitburner-cli -- serve
 Then connect Bitburner Remote API to `127.0.0.1:12525` and run REPL smoke
 commands such as `servers`, `files home`, `sync home game_files scripts
 --dry-run`, and `defs NetscriptDefinitions.d.ts`.
+
+Check the bridge:
+
+```sh
+curl http://127.0.0.1:12526/health
+curl http://127.0.0.1:12526/servers
+curl "http://127.0.0.1:12526/files?server=home"
+curl http://127.0.0.1:12526/defs
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:12526/health
+Invoke-RestMethod http://127.0.0.1:12526/servers
+Invoke-RestMethod "http://127.0.0.1:12526/files?server=home"
+Invoke-RestMethod http://127.0.0.1:12526/defs
+```
+
+## Security Notes
+
+The HTTP bridge binds to loopback by default and is intended only for local
+editor/tool integration. Do not bind it to a LAN/WAN interface unless you
+understand the risk. No auth/token is implemented yet; future hardening can add
+a random local token or config file.

@@ -16,27 +16,33 @@ It does not expose a TCP listener, TCP client, websocket server, websocket
 client, project file enumeration, or general editor command/action API.
 
 Direct Bitburner Remote API communication from the Zed extension remains
-blocked until Zed exposes a suitable transport API or another supported bridge
-is added. Do not fake upload/download support. Do not add shell-out behavior in
-this pass.
+blocked until Zed exposes a suitable transport API. The supported bridge path is
+now local HTTP through `bbrs serve`. Do not fake upload/download support. Do not
+add shell-out behavior.
 
-Future practical paths:
+Practical paths:
 
 1. Zed extension -> local HTTP bridge in `bbrs serve` -> Bitburner Remote API
 2. Zed extension -> process execution of `bbrs`
 3. wait for Zed to expose socket/websocket APIs
 
-Preferred future path: Zed extension -> local HTTP -> `bbrs serve` ->
-WebSocket -> Bitburner.
+Preferred path: Zed extension -> local HTTP -> `bbrs serve` -> WebSocket ->
+Bitburner.
 
-The supported runtime workflow today is `bbrs serve` followed by REPL commands
-after Bitburner connects. See [zed-extension.md](zed-extension.md) for the
-current extension API capability notes.
+The supported runtime workflow today is `bbrs serve`, optional HTTP bridge
+calls, and REPL commands after Bitburner connects. See
+[zed-extension.md](zed-extension.md) for the current extension API capability
+notes.
+
+The HTTP bridge binds to loopback by default and is intended only for local
+editor/tool integration. Do not bind it to a LAN/WAN interface unless you
+understand the risk. No auth/token is implemented yet; future hardening can add
+a random local token or config file.
 
 ## Roadmap
 
 - v0.1: CLI works.
-- v0.2: Keep Zed scaffold checked while waiting for a supported bridge path.
+- v0.2: Local HTTP bridge health check from the Zed slash command.
 - v0.3: MCP exposes Bitburner tools to Zed Agent.
 - Future: daemon mode or IPC for repeated syncs.
 

@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 
 use bitburner_api::{DEFAULT_ADDRESS, DEFAULT_SERVER};
 
+use crate::http_bridge::DEFAULT_HTTP_ADDRESS;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "bbrs",
@@ -23,6 +25,9 @@ pub enum TopLevelCommand {
         /// Local address for Bitburner Remote API to connect to.
         #[arg(long = "addr", default_value = DEFAULT_ADDRESS)]
         address: String,
+        /// Local HTTP control API address for editor/tool integrations.
+        #[arg(long = "http-addr", default_value = DEFAULT_HTTP_ADDRESS)]
+        http_address: String,
     },
 }
 
@@ -189,7 +194,21 @@ mod tests {
         assert_eq!(
             cli.command,
             TopLevelCommand::Serve {
-                address: "127.0.0.1:12526".to_string()
+                address: "127.0.0.1:12526".to_string(),
+                http_address: DEFAULT_HTTP_ADDRESS.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_serve_with_http_addr() {
+        let cli = parse_from(["bbrs", "serve", "--http-addr", "127.0.0.1:13000"]).expect("parse");
+
+        assert_eq!(
+            cli.command,
+            TopLevelCommand::Serve {
+                address: DEFAULT_ADDRESS.to_string(),
+                http_address: "127.0.0.1:13000".to_string(),
             }
         );
     }

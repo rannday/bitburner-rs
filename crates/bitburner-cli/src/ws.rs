@@ -1,6 +1,5 @@
 use std::io::{self, BufRead, Write};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::Context;
@@ -9,15 +8,9 @@ use bitburner_api::RemoteClient;
 use crate::AppResult;
 use crate::args;
 use crate::cli::{execute_with_client, print_repl_help};
+use crate::connection::{SharedConnection, SharedConnectionError};
 
-type SharedConnection = Arc<Mutex<ConnectionSlot>>;
 const REPL_PROMPT: &str = "bbrs> ";
-
-#[derive(Default)]
-struct ConnectionSlot {
-    generation: u64,
-    client: Option<RemoteClient>,
-}
 
 fn print_async_status(message: impl std::fmt::Display) {
     let mut stdout = io::stdout();
@@ -26,20 +19,21 @@ fn print_async_status(message: impl std::fmt::Display) {
     let _ = stdout.flush();
 }
 
-fn startup_banner(address: &str) -> String {
+fn startup_banner(address: &str, http_address: &str) -> String {
     format!(
-        "Starting Bitburner Remote Server version {}\nListening on {address}\nType `help` for usage\n\n",
+        "Starting Bitburner Remote Server version {}\nListening on {address}\nHTTP bridge on {http_address}\nType `help` for usage\n\n",
         env!("CARGO_PKG_VERSION")
     )
 }
 
-pub fn serve(address: &str) -> AppResult<()> {
+pub fn serve(address: &str, http_address: &str) -> AppResult<()> {
     let listener = TcpListener::bind(address)
         .with_context(|| format!("bind websocket server on {address}"))?;
-    print!("{}", startup_banner(address));
+    let current = SharedConnection::default();
+    crate::http_bridge::spawn_http_server(http_address, current.clone())?;
+    print!("{}", startup_banner(address, http_address));
 
-    let current = Arc::new(Mutex::new(ConnectionSlot::default()));
-    let accept_current = Arc::clone(&current);
+    let accept_current = current.clone();
 
     thread::spawn(move || accept_loop(listener, accept_current));
 
@@ -71,23 +65,9 @@ fn accept_loop(listener: TcpListener, current: SharedConnection) {
 }
 
 fn replace_connection(current: &SharedConnection, client: RemoteClient) {
-    let previous = match current.lock() {
-        Ok(mut slot) => {
-            slot.generation += 1;
-            let previous = slot.client.take();
-            if previous.is_some() {
-                print_async_status("replacing previous Bitburner connection");
-            }
-            slot.client = Some(client);
-            previous
-        }
-        Err(_) => {
-            eprintln!("error: connection state mutex poisoned");
-            return;
-        }
-    };
-
+    let previous = current.replace(client);
     if let Some(mut previous) = previous {
+        print_async_status("replacing previous Bitburner connection");
         let _ = previous.close();
     }
 }
@@ -148,56 +128,15 @@ fn execute_repl_command(
     current: &SharedConnection,
     command: args::ReplCommand,
 ) -> AppResult<crate::cli::CommandOutput> {
-    let (generation, mut remote) = take_connection(current)?;
-    let result = execute_with_client(command, &mut remote);
-    restore_or_close_connection(current, generation, remote, result.is_ok())?;
-    result
-}
-
-fn take_connection(current: &SharedConnection) -> AppResult<(u64, RemoteClient)> {
-    let mut slot = current
-        .lock()
-        .map_err(|_| anyhow::anyhow!("connection state mutex poisoned"))?;
-    let Some(remote) = slot.client.take() else {
-        anyhow::bail!(
-            "Bitburner is not connected. In Bitburner, open Options -> Remote API and connect to the bbrs address."
-        );
-    };
-    Ok((slot.generation, remote))
-}
-
-fn restore_or_close_connection(
-    current: &SharedConnection,
-    generation: u64,
-    remote: RemoteClient,
-    keep: bool,
-) -> AppResult<()> {
-    let mut remote = Some(remote);
-
-    if !keep {
-        if let Some(mut remote) = remote {
-            let _ = remote.close();
-        }
-        return Ok(());
-    }
-
-    let should_close = {
-        let mut slot = current
-            .lock()
-            .map_err(|_| anyhow::anyhow!("connection state mutex poisoned"))?;
-        if slot.generation == generation && slot.client.is_none() {
-            slot.client = remote.take();
-            false
-        } else {
-            true
-        }
-    };
-
-    if should_close && let Some(mut remote) = remote {
-        let _ = remote.close();
-    }
-
-    Ok(())
+    current
+        .with_client(|remote| execute_with_client(command, remote))
+        .map_err(|err| match err {
+            SharedConnectionError::NotConnected => anyhow::anyhow!(
+                "Bitburner is not connected. In Bitburner, open Options -> Remote API and connect to the bbrs address."
+            ),
+            SharedConnectionError::State(message) => anyhow::anyhow!(message),
+            SharedConnectionError::Command(err) => err,
+        })
 }
 
 pub fn parse_repl_words(line: &str) -> AppResult<Vec<String>> {
@@ -255,9 +194,9 @@ mod tests {
     #[test]
     fn startup_banner_is_short() {
         assert_eq!(
-            startup_banner("127.0.0.1:12525"),
+            startup_banner("127.0.0.1:12525", "127.0.0.1:12526"),
             format!(
-                "Starting Bitburner Remote Server version {}\nListening on 127.0.0.1:12525\nType `help` for usage\n\n",
+                "Starting Bitburner Remote Server version {}\nListening on 127.0.0.1:12525\nHTTP bridge on 127.0.0.1:12526\nType `help` for usage\n\n",
                 env!("CARGO_PKG_VERSION")
             )
         );

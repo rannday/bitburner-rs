@@ -14,8 +14,8 @@ cargo run -p bitburner-cli -- serve
 ```
 
 The server should print the Bitburner Remote Server version,
-`Listening on 127.0.0.1:12525`, and `` Type `help` for usage `` before showing
-the prompt.
+`Listening on 127.0.0.1:12525`, `HTTP bridge on 127.0.0.1:12526`, and
+`` Type `help` for usage `` before showing the prompt.
 
 ## Connect Bitburner
 
@@ -49,6 +49,29 @@ Expected results:
 - `save save-file.json` writes the save file JSON locally.
 - `sync ... --dry-run` prints the planned uploads without modifying the game.
 - `sync ...` uploads the planned files and overwrites matching remote filenames.
+
+## HTTP bridge smoke test
+
+While `bbrs serve` is running, check the local bridge:
+
+```sh
+curl http://127.0.0.1:12526/health
+curl http://127.0.0.1:12526/servers
+curl "http://127.0.0.1:12526/files?server=home"
+curl http://127.0.0.1:12526/defs
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:12526/health
+Invoke-RestMethod http://127.0.0.1:12526/servers
+Invoke-RestMethod "http://127.0.0.1:12526/files?server=home"
+Invoke-RestMethod http://127.0.0.1:12526/defs
+```
+
+Expected result: `/health` reports the bridge and connection status. The other
+endpoints return JSON from the connected Bitburner client.
 
 ## File round-trip test
 
@@ -96,4 +119,7 @@ Expected result: the new connection replaces the previous connection, the old we
 - Sync intentionally uploads `.js`, `.ts`, `.txt`, `.script`, and `.ns` files.
 - Sync intentionally overwrites remote files with matching filenames.
 - There is no remote cleanup command. Old files are left in-game unless manually deleted.
-- The REPL executes one command at a time. Connection state is not locked while a remote command is running, so reconnects are not blocked by a long request.
+- REPL and HTTP bridge commands share the same current connection and execute
+  one command at a time.
+- The HTTP bridge binds to loopback by default and has no auth/token yet. Do
+  not bind it to a LAN/WAN interface unless you understand the risk.

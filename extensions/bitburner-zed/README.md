@@ -46,7 +46,9 @@ Preferred future path: Zed extension -> local HTTP -> `bbrs serve` ->
 WebSocket -> Bitburner.
 
 The extension currently registers a minimal `/bitburner` slash-command handler
-that reports defaults and the transport limitation. It does not upload,
+that calls `http://127.0.0.1:12526/health` through `zed::http_client`. If the
+bridge responds, it reports whether Bitburner is connected. If the bridge is
+not running, it tells the user to start `bbrs serve`. It does not upload,
 download, or sync files.
 
 ## Intended Defaults
@@ -55,6 +57,7 @@ download, or sync files.
 - `bitburner.remoteDir`: `scripts`
 - `bitburner.host`: `127.0.0.1`
 - `bitburner.port`: `12525`
+- `bitburner.httpBridge`: `127.0.0.1:12526`
 
 Custom `bitburner.*` settings are not wired yet because the Rust API wrapper
 does not expose a generic custom-extension settings helper in this version.
@@ -69,5 +72,23 @@ cargo check --manifest-path extensions/bitburner-zed/Cargo.toml
 ```
 
 No live Bitburner integration tests are included. Runtime behavior should be
-manual-tested once Zed exposes a usable transport or another supported
-integration path is added.
+manual-tested with `bbrs serve`:
+
+```sh
+curl http://127.0.0.1:12526/health
+curl http://127.0.0.1:12526/servers
+curl "http://127.0.0.1:12526/files?server=home"
+curl http://127.0.0.1:12526/defs
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:12526/health
+Invoke-RestMethod http://127.0.0.1:12526/servers
+Invoke-RestMethod "http://127.0.0.1:12526/files?server=home"
+Invoke-RestMethod http://127.0.0.1:12526/defs
+```
+
+The HTTP bridge binds to loopback by default and has no auth/token yet. Do not
+bind it to a LAN/WAN interface unless you understand the risk.

@@ -1,11 +1,18 @@
 # MCP Integration Plan
 
-`bbrs mcp` is planned as the future Zed Agent integration path. The working product today is `bbrs serve` and its REPL commands.
+`bbrs mcp` is planned as the future Zed Agent integration path. The working
+product today is `bbrs serve`, its REPL commands, and the local HTTP bridge.
 
 The workspace is split into `bitburner-api` and `bitburner-cli`. MCP should
 reuse `bitburner-api` for typed errors, protocol/types, path/sync planning, and
 native Remote API access. It should share CLI command behavior only through
 stable code paths, not private CLI internals.
+
+The local bridge already uses this shape:
+
+```text
+Zed extension -> HTTP localhost -> bbrs serve -> Bitburner Remote API WebSocket
+```
 
 ## Why MCP
 

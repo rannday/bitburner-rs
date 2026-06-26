@@ -34,7 +34,10 @@ pub fn run() -> AppResult<()> {
     let cli = args::parse_env();
 
     match cli.command {
-        TopLevelCommand::Serve { address } => crate::ws::serve(&address),
+        TopLevelCommand::Serve {
+            address,
+            http_address,
+        } => crate::ws::serve(&address, &http_address),
     }
 }
 
