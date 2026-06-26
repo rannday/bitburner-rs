@@ -249,7 +249,7 @@ fn write_text_file(path: &std::path::Path, content: String) -> AppResult<()> {
 
 pub fn repl_help_text() -> String {
     "\
-REPL commands:
+Usage:
   help
   quit | exit
   servers
@@ -348,7 +348,14 @@ mod tests {
 
     #[test]
     fn help_is_returned_as_output() {
-        assert!(repl_help_text().contains("sync <server> <local-dir>"));
+        let help = repl_help_text();
+
+        assert!(help.contains("Usage:"));
+        assert!(help.contains("  help"));
+        assert!(help.contains("  servers"));
+        assert!(help.contains("  files [server]"));
+        assert!(help.contains("  sync <server> <local-dir> [remote-dir] [--dry-run]"));
+        assert!(!help.contains("REPL commands:"));
     }
 
     #[test]

@@ -26,21 +26,23 @@ fn print_async_status(message: impl std::fmt::Display) {
     let _ = stdout.flush();
 }
 
+fn startup_banner(address: &str) -> String {
+    format!(
+        "Starting Bitburner Remote Server version {}\nListening on {address}\nType `help` for usage\n\n",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
 pub fn serve(address: &str) -> AppResult<()> {
     let listener = TcpListener::bind(address)
         .with_context(|| format!("bind websocket server on {address}"))?;
-    println!("listening on {address}");
-    println!("waiting for Bitburner Remote API client");
+    print!("{}", startup_banner(address));
 
     let current = Arc::new(Mutex::new(ConnectionSlot::default()));
     let accept_current = Arc::clone(&current);
 
     thread::spawn(move || accept_loop(listener, accept_current));
 
-    println!(
-        "ready. enter commands like `servers`, `files home`, or `sync home game_files scripts`."
-    );
-    print_repl_help();
     repl(current)
 }
 
@@ -248,6 +250,17 @@ mod tests {
         args::parse_repl_from(std::iter::once("bbrs".to_string()).chain(words))
             .expect("parse repl command")
             .command
+    }
+
+    #[test]
+    fn startup_banner_is_short() {
+        assert_eq!(
+            startup_banner("127.0.0.1:12525"),
+            format!(
+                "Starting Bitburner Remote Server version {}\nListening on 127.0.0.1:12525\nType `help` for usage\n\n",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 
     #[test]

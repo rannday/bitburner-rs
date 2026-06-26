@@ -12,7 +12,9 @@ cargo test --workspace --all-targets
 cargo run -p bitburner-cli -- serve
 ```
 
-The server should print that it is listening on `127.0.0.1:12525` and waiting for Bitburner to connect.
+The server should print the Bitburner Remote Server version,
+`Listening on 127.0.0.1:12525`, and `` Type `help` for usage `` before showing
+the prompt.
 
 ## Connect Bitburner
 
