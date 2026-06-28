@@ -17,11 +17,6 @@ pub const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UploadableFileKind {
-    Text,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadableExtension {
     JavaScript,
     TypeScript,
@@ -52,8 +47,8 @@ impl UploadableExtension {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalFileEntry {
+    pub source_path: PathBuf,
     pub relative_path: PathBuf,
-    pub content_kind: UploadableFileKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +68,7 @@ impl Default for SyncOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncItem {
+    pub source_path: PathBuf,
     pub relative_path: PathBuf,
     pub remote_path: String,
 }
@@ -92,6 +88,7 @@ pub fn build_sync_plan_from_entries(
             &path_to_forward_slashes(&entry.relative_path)?,
         )?;
         items.push(SyncItem {
+            source_path: entry.source_path,
             relative_path: entry.relative_path,
             remote_path,
         });
@@ -119,7 +116,9 @@ pub fn is_uploadable_path_with_extensions(
 }
 
 pub fn is_default_ignored_dir_name(name: &str) -> bool {
-    DEFAULT_IGNORED_DIR_NAMES.contains(&name)
+    DEFAULT_IGNORED_DIR_NAMES
+        .iter()
+        .any(|ignored| name.eq_ignore_ascii_case(ignored))
 }
 
 #[cfg(test)]
@@ -128,8 +127,8 @@ mod tests {
 
     fn entry(path: &str) -> LocalFileEntry {
         LocalFileEntry {
+            source_path: PathBuf::from(path),
             relative_path: PathBuf::from(path),
-            content_kind: UploadableFileKind::Text,
         }
     }
 
@@ -163,7 +162,9 @@ mod tests {
         ] {
             assert!(is_default_ignored_dir_name(name), "{name}");
         }
-        assert!(!is_default_ignored_dir_name("Target"));
+        assert!(is_default_ignored_dir_name("Target"));
+        assert!(is_default_ignored_dir_name("TARGET"));
+        assert!(is_default_ignored_dir_name("Node_Modules"));
         assert!(!is_default_ignored_dir_name("src"));
     }
 

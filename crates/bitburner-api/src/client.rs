@@ -5,99 +5,47 @@ use serde_json::{Value, json};
 
 use crate::transport::{BitburnerTransport, NativeWebSocketTransport};
 use crate::{
-    BitburnerError, BitburnerFile, DEFAULT_SERVER, FileMetadata, JsonRpcRequest, JsonRpcResponse,
-    Result, SaveFile, ServerInfo,
+    BitburnerError, BitburnerFile, FileMetadata, JsonRpcRequest, JsonRpcResponse, Result, SaveFile,
+    ServerInfo, default_server_name,
 };
 
 pub trait BitburnerApi {
     fn request_value(&mut self, method: &str, params: Option<Value>) -> Result<Value>;
 
     fn push_file(&mut self, server: &str, filename: &str, content: &str) -> Result<()> {
-        let result: String = request(
+        request_ok(
             self,
             "pushFile",
-            Some(json!({
-              "filename": filename,
-              "content": content,
-              "server": normalize_server(server),
-            })),
-        )?;
-        validate_ok("pushFile", &result)
+            Some(push_params(server, filename, content)),
+        )
     }
 
     fn get_file(&mut self, server: &str, filename: &str) -> Result<String> {
-        request(
-            self,
-            "getFile",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )
+        request(self, "getFile", Some(file_params(server, filename)))
     }
 
     fn get_file_metadata(&mut self, server: &str, filename: &str) -> Result<FileMetadata> {
-        request(
-            self,
-            "getFileMetadata",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )
+        request(self, "getFileMetadata", Some(file_params(server, filename)))
     }
 
     fn delete_file(&mut self, server: &str, filename: &str) -> Result<()> {
-        let result: String = request(
-            self,
-            "deleteFile",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )?;
-        validate_ok("deleteFile", &result)
+        request_ok(self, "deleteFile", Some(file_params(server, filename)))
     }
 
     fn get_file_names(&mut self, server: &str) -> Result<Vec<String>> {
-        request(
-            self,
-            "getFileNames",
-            Some(json!({
-              "server": normalize_server(server),
-            })),
-        )
+        request(self, "getFileNames", Some(server_params(server)))
     }
 
     fn get_all_files(&mut self, server: &str) -> Result<Vec<BitburnerFile>> {
-        request(
-            self,
-            "getAllFiles",
-            Some(json!({
-              "server": normalize_server(server),
-            })),
-        )
+        request(self, "getAllFiles", Some(server_params(server)))
     }
 
     fn get_all_file_metadata(&mut self, server: &str) -> Result<Vec<FileMetadata>> {
-        request(
-            self,
-            "getAllFileMetadata",
-            Some(json!({
-              "server": normalize_server(server),
-            })),
-        )
+        request(self, "getAllFileMetadata", Some(server_params(server)))
     }
 
     fn calculate_ram(&mut self, server: &str, filename: &str) -> Result<f64> {
-        request(
-            self,
-            "calculateRam",
-            Some(json!({
-              "filename": filename,
-              "server": normalize_server(server),
-            })),
-        )
+        request(self, "calculateRam", Some(file_params(server, filename)))
     }
 
     fn get_definition_file(&mut self) -> Result<String> {
@@ -161,13 +109,8 @@ impl<T> JsonRpcClient<T> {
 impl<T: BitburnerTransport> JsonRpcClient<T> {
     fn build_request(&mut self, method: &str, params: Option<Value>) -> JsonRpcRequest {
         let id = self.next_id;
-        self.next_id += 1;
-        JsonRpcRequest {
-            jsonrpc: "2.0",
-            id,
-            method: method.to_string(),
-            params,
-        }
+        self.next_id = self.next_id.checked_add(1).unwrap_or(1);
+        JsonRpcRequest::new(id, method, params)
     }
 
     pub fn request_value(&mut self, method: &str, params: Option<Value>) -> Result<Value> {
@@ -194,12 +137,31 @@ where
         .map_err(|err| BitburnerError::invalid_protocol(format!("decode {method} result: {err}")))
 }
 
-fn normalize_server(server: &str) -> &str {
-    if server.is_empty() {
-        DEFAULT_SERVER
-    } else {
-        server
-    }
+fn request_ok<Api>(api: &mut Api, method: &str, params: Option<Value>) -> Result<()>
+where
+    Api: BitburnerApi + ?Sized,
+{
+    let result: String = request(api, method, params)?;
+    validate_ok(method, &result)
+}
+
+fn server_params(server: &str) -> Value {
+    json!({ "server": default_server_name(Some(server)) })
+}
+
+fn file_params(server: &str, filename: &str) -> Value {
+    json!({
+        "filename": filename,
+        "server": default_server_name(Some(server)),
+    })
+}
+
+fn push_params(server: &str, filename: &str, content: &str) -> Value {
+    json!({
+        "filename": filename,
+        "content": content,
+        "server": default_server_name(Some(server)),
+    })
 }
 
 fn validate_ok(method: &str, result: &str) -> Result<()> {

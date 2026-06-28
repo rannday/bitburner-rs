@@ -1,6 +1,6 @@
 use std::sync::{Arc, Condvar, Mutex};
 
-use bitburner_api::{BitburnerApi, RemoteClient};
+use bitburner_api::{BitburnerApi, BitburnerError, RemoteClient};
 
 use crate::AppResult;
 
@@ -33,6 +33,42 @@ pub(crate) enum SharedConnectionError {
     NotConnected,
     State(String),
     Command(anyhow::Error),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientDisposition {
+    Keep,
+    Drop,
+}
+
+#[derive(Debug)]
+pub(crate) struct ClientCommandResult<T> {
+    value: T,
+    disposition: ClientDisposition,
+}
+
+impl<T> ClientCommandResult<T> {
+    pub(crate) fn keep(value: T) -> Self {
+        Self {
+            value,
+            disposition: ClientDisposition::Keep,
+        }
+    }
+
+    pub(crate) fn drop_client(value: T) -> Self {
+        Self {
+            value,
+            disposition: ClientDisposition::Drop,
+        }
+    }
+
+    pub(crate) fn keep_client(&self) -> bool {
+        self.disposition == ClientDisposition::Keep
+    }
+
+    pub(crate) fn into_value(self) -> T {
+        self.value
+    }
 }
 
 impl std::fmt::Display for SharedConnectionError {
@@ -89,11 +125,23 @@ impl SharedConnection {
         &self,
         command: impl FnOnce(&mut dyn BitburnerApi) -> AppResult<T>,
     ) -> Result<T, SharedConnectionError> {
+        self.with_client_control(|api| command(api).map(ClientCommandResult::keep))
+    }
+
+    pub(crate) fn with_client_control<T>(
+        &self,
+        command: impl FnOnce(&mut dyn BitburnerApi) -> AppResult<ClientCommandResult<T>>,
+    ) -> Result<T, SharedConnectionError> {
         let (generation, mut remote) = self.take()?;
         let result = command(remote.as_mut());
-        let keep = result.is_ok();
+        let keep = match &result {
+            Ok(result) => result.keep_client(),
+            Err(err) => !command_error_invalidates_connection(err),
+        };
         self.restore_or_close(generation, remote, keep)?;
-        result.map_err(SharedConnectionError::Command)
+        result
+            .map(ClientCommandResult::into_value)
+            .map_err(SharedConnectionError::Command)
     }
 
     fn take(&self) -> Result<(u64, Box<dyn SharedClient>), SharedConnectionError> {
@@ -167,6 +215,24 @@ impl SharedConnection {
         cvar.notify_all();
         Ok(())
     }
+}
+
+fn command_error_invalidates_connection(err: &anyhow::Error) -> bool {
+    err.chain().any(|source| {
+        source
+            .downcast_ref::<BitburnerError>()
+            .is_some_and(bitburner_error_invalidates_connection)
+    })
+}
+
+pub(crate) fn bitburner_error_invalidates_connection(err: &BitburnerError) -> bool {
+    matches!(
+        err,
+        BitburnerError::InvalidProtocol(_)
+            | BitburnerError::Json(_)
+            | BitburnerError::Io { .. }
+            | BitburnerError::WebSocket { .. }
+    )
 }
 
 #[cfg(test)]
@@ -317,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_command_closes_connection_and_later_calls_do_not_hang() {
+    fn ordinary_command_error_keeps_connection_and_later_calls_do_not_hang() {
         let connection = SharedConnection::default();
         let (client, closes) = FakeClient::new("one");
         install_fake(&connection, client);
@@ -327,6 +393,66 @@ mod tests {
             .expect_err("command error");
 
         assert!(matches!(err, SharedConnectionError::Command(_)));
+        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        let later = connection
+            .with_client(|api| Ok(api.request_value("who", None)?))
+            .expect("later call");
+        assert_eq!(later, json!("one"));
+    }
+
+    #[test]
+    fn protocol_command_error_closes_connection_and_later_calls_do_not_hang() {
+        let connection = SharedConnection::default();
+        let (client, closes) = FakeClient::new("one");
+        install_fake(&connection, client);
+
+        let err = connection
+            .with_client::<()>(|_| Err(BitburnerError::invalid_protocol("bad response").into()))
+            .expect_err("command error");
+
+        assert!(matches!(err, SharedConnectionError::Command(_)));
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        let later = connection
+            .with_client(|_| Ok(()))
+            .expect_err("not connected");
+        assert!(matches!(later, SharedConnectionError::NotConnected));
+    }
+
+    #[test]
+    fn io_command_error_closes_connection_and_later_calls_do_not_hang() {
+        let connection = SharedConnection::default();
+        let (client, closes) = FakeClient::new("one");
+        install_fake(&connection, client);
+
+        let err = connection
+            .with_client::<()>(|_| {
+                Err(BitburnerError::io(
+                    "read response",
+                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe broke"),
+                )
+                .into())
+            })
+            .expect_err("command error");
+
+        assert!(matches!(err, SharedConnectionError::Command(_)));
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        let later = connection
+            .with_client(|_| Ok(()))
+            .expect_err("not connected");
+        assert!(matches!(later, SharedConnectionError::NotConnected));
+    }
+
+    #[test]
+    fn control_result_can_drop_connection_without_command_error() {
+        let connection = SharedConnection::default();
+        let (client, closes) = FakeClient::new("one");
+        install_fake(&connection, client);
+
+        let result = connection
+            .with_client_control(|_| Ok(ClientCommandResult::drop_client("partial failure")))
+            .expect("control result");
+
+        assert_eq!(result, "partial failure");
         assert_eq!(closes.load(Ordering::SeqCst), 1);
         let later = connection
             .with_client(|_| Ok(()))

@@ -71,9 +71,9 @@ pub enum ReplCommand {
     Metadata { server: String, filename: String },
     /// Write all remote files as pretty JSON.
     AllFiles {
-        /// Either <local-path>, or <server> <local-path>.
-        #[arg(required = true, num_args = 1..=2, value_names = ["server_or_local_path", "local_path"])]
-        values: Vec<String>,
+        #[arg(long, default_value = DEFAULT_SERVER)]
+        server: String,
+        local_path: PathBuf,
     },
     /// Print all remote file metadata as pretty JSON.
     AllMetadata {
@@ -170,19 +170,22 @@ mod tests {
         assert_eq!(
             cli.command,
             ReplCommand::AllFiles {
-                values: vec!["files.json".to_string()],
+                server: "home".to_string(),
+                local_path: PathBuf::from("files.json"),
             }
         );
     }
 
     #[test]
     fn repl_parses_all_files_with_server() {
-        let cli = parse_repl_from(["bbrs", "all-files", "home", "files.json"]).expect("parse");
+        let cli = parse_repl_from(["bbrs", "all-files", "--server", "home", "files.json"])
+            .expect("parse");
 
         assert_eq!(
             cli.command,
             ReplCommand::AllFiles {
-                values: vec!["home".to_string(), "files.json".to_string()],
+                server: "home".to_string(),
+                local_path: PathBuf::from("files.json"),
             }
         );
     }

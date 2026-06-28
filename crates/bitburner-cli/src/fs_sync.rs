@@ -1,20 +1,13 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use bitburner_api::{
-    LocalFileEntry, SyncOptions as CoreSyncOptions, UploadableFileKind,
-    build_sync_plan_from_entries, is_default_ignored_dir_name, is_uploadable_path,
+    LocalFileEntry, SyncItem, SyncOptions as CoreSyncOptions, build_sync_plan_from_entries,
+    is_default_ignored_dir_name,
 };
 
 use crate::AppResult;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SyncItem {
-    pub local_path: PathBuf,
-    pub remote_path: String,
-}
 
 pub fn build_sync_plan(local_root: &Path, remote_dir: Option<&str>) -> AppResult<Vec<SyncItem>> {
     let metadata = fs::metadata(local_root)
@@ -25,38 +18,22 @@ pub fn build_sync_plan(local_root: &Path, remote_dir: Option<&str>) -> AppResult
 
     let mut walk_items = Vec::new();
     visit(local_root, local_root, &mut walk_items)?;
-    let local_by_relative = walk_items
-        .iter()
-        .map(|item| (item.relative_path.clone(), item.local_path.clone()))
-        .collect::<HashMap<_, _>>();
 
-    let core_plan = build_sync_plan_from_entries(
-        walk_items.iter().map(|item| LocalFileEntry {
+    Ok(build_sync_plan_from_entries(
+        walk_items.into_iter().map(|item| LocalFileEntry {
+            source_path: item.source_path,
             relative_path: item.relative_path.clone(),
-            content_kind: UploadableFileKind::Text,
         }),
         &CoreSyncOptions {
             remote_dir: remote_dir.map(str::to_string),
             ..CoreSyncOptions::default()
         },
-    )?;
-
-    Ok(core_plan
-        .into_iter()
-        .filter_map(|core_item| {
-            local_by_relative
-                .get(&core_item.relative_path)
-                .map(|local_path| SyncItem {
-                    local_path: local_path.clone(),
-                    remote_path: core_item.remote_path,
-                })
-        })
-        .collect())
+    )?)
 }
 
 #[derive(Debug, Clone)]
 struct WalkItem {
-    local_path: PathBuf,
+    source_path: PathBuf,
     relative_path: PathBuf,
 }
 
@@ -80,7 +57,7 @@ fn visit(local_root: &Path, current: &Path, items: &mut Vec<WalkItem>) -> AppRes
                 continue;
             }
             visit(local_root, &path, items)?;
-        } else if file_type.is_file() && is_uploadable_path(&path) {
+        } else if file_type.is_file() {
             let relative_path = path
                 .strip_prefix(local_root)
                 .with_context(|| {
@@ -92,7 +69,7 @@ fn visit(local_root: &Path, current: &Path, items: &mut Vec<WalkItem>) -> AppRes
                 })?
                 .to_path_buf();
             items.push(WalkItem {
-                local_path: path,
+                source_path: path,
                 relative_path,
             });
         }
@@ -336,19 +313,24 @@ mod tests {
     }
 
     #[test]
-    fn build_sync_plan_matches_ignored_dirs_case_sensitively() {
+    fn build_sync_plan_matches_ignored_dirs_case_insensitively() {
         let root = temp_root("bbrs-sync-ignore-case");
         create_dir_all(root.join("Target")).expect("mkdir Target");
+        create_dir_all(root.join("Node_Modules")).expect("mkdir Node_Modules");
         write(
             root.join("Target").join("foo.js"),
+            "export async function main() {}",
+        )
+        .expect("write");
+        write(
+            root.join("Node_Modules").join("bar.js"),
             "export async function main() {}",
         )
         .expect("write");
 
         let plan = build_sync_plan(&root, None).expect("plan");
 
-        assert_eq!(plan.len(), 1);
-        assert_eq!(plan[0].remote_path, "Target/foo.js");
+        assert!(plan.is_empty());
 
         remove_dir_all(root).expect("cleanup");
     }

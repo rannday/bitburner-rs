@@ -10,6 +10,17 @@ pub struct JsonRpcRequest {
     pub params: Option<Value>,
 }
 
+impl JsonRpcRequest {
+    pub fn new(id: u64, method: impl Into<String>, params: Option<Value>) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            method: method.into(),
+            params,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct JsonRpcResponse<T> {
     pub jsonrpc: String,

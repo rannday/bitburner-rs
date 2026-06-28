@@ -17,8 +17,8 @@ pub use path::{
 pub use protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 pub use sync::{
     DEFAULT_IGNORED_DIR_NAMES, LocalFileEntry, SyncItem, SyncOptions, UploadableExtension,
-    UploadableFileKind, build_sync_plan_from_entries, is_default_ignored_dir_name,
-    is_uploadable_path, is_uploadable_path_with_extensions,
+    build_sync_plan_from_entries, is_default_ignored_dir_name, is_uploadable_path,
+    is_uploadable_path_with_extensions,
 };
 pub use transport::{BitburnerTransport, NativeWebSocketTransport};
 pub use types::{BitburnerFile, FileMetadata, SaveFile, ServerInfo};
@@ -26,3 +26,10 @@ pub use types::{BitburnerFile, FileMetadata, SaveFile, ServerInfo};
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:12525";
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_SERVER: &str = "home";
+
+pub fn default_server_name(server: Option<&str>) -> &str {
+    match server {
+        Some(server) if !server.trim().is_empty() => server,
+        _ => DEFAULT_SERVER,
+    }
+}

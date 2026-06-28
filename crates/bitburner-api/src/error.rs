@@ -8,8 +8,14 @@ pub enum BitburnerError {
     InvalidProtocol(String),
     JsonRpc(JsonRpcError),
     Json(serde_json::Error),
-    Io(String),
-    WebSocket(String),
+    Io {
+        context: String,
+        source: Box<std::io::Error>,
+    },
+    WebSocket {
+        context: String,
+        source: Box<tungstenite::Error>,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, BitburnerError>;
@@ -23,12 +29,18 @@ impl BitburnerError {
         Self::InvalidProtocol(message.into())
     }
 
-    pub fn io(message: impl Into<String>) -> Self {
-        Self::Io(message.into())
+    pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
+        Self::Io {
+            context: context.into(),
+            source: Box::new(source),
+        }
     }
 
-    pub fn websocket(message: impl Into<String>) -> Self {
-        Self::WebSocket(message.into())
+    pub fn websocket(context: impl Into<String>, source: tungstenite::Error) -> Self {
+        Self::WebSocket {
+            context: context.into(),
+            source: Box::new(source),
+        }
     }
 }
 
@@ -46,8 +58,8 @@ impl fmt::Display for BitburnerError {
                 error.message
             ),
             Self::Json(error) => write!(formatter, "{error}"),
-            Self::Io(message) => formatter.write_str(message),
-            Self::WebSocket(message) => formatter.write_str(message),
+            Self::Io { context, source } => write!(formatter, "{context}: {source}"),
+            Self::WebSocket { context, source } => write!(formatter, "{context}: {source}"),
         }
     }
 }
@@ -56,6 +68,8 @@ impl std::error::Error for BitburnerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Json(error) => Some(error),
+            Self::Io { source, .. } => Some(source.as_ref()),
+            Self::WebSocket { source, .. } => Some(source.as_ref()),
             _ => None,
         }
     }
@@ -64,5 +78,49 @@ impl std::error::Error for BitburnerError {
 impl From<serde_json::Error> for BitburnerError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::*;
+
+    #[test]
+    fn io_error_preserves_context_and_source() {
+        let err = BitburnerError::io(
+            "read websocket response",
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe broke"),
+        );
+
+        let display = err.to_string();
+        assert!(display.contains("read websocket response"));
+        assert!(display.contains("pipe broke"));
+        assert_eq!(
+            err.source().expect("source").to_string(),
+            "pipe broke".to_string()
+        );
+    }
+
+    #[test]
+    fn websocket_error_preserves_context_and_source() {
+        let err = BitburnerError::websocket(
+            "send websocket request",
+            tungstenite::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset",
+            )),
+        );
+
+        let display = err.to_string();
+        assert!(display.contains("send websocket request"));
+        assert!(display.contains("connection reset"));
+        assert!(
+            err.source()
+                .expect("source")
+                .to_string()
+                .contains("connection reset")
+        );
     }
 }

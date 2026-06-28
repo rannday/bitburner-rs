@@ -5,16 +5,17 @@ use std::thread;
 
 use anyhow::Context;
 use bitburner_api::{
-    BitburnerApi, DEFAULT_SERVER, LocalFileEntry, SyncOptions, UploadableExtension,
-    UploadableFileKind, build_sync_plan_from_entries, normalize_remote_file_path,
+    BitburnerApi, LocalFileEntry, SyncOptions, build_sync_plan_from_entries, default_server_name,
+    normalize_remote_file_path,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use url::Url;
 
 use crate::AppResult;
-use crate::connection::{SharedConnection, SharedConnectionError};
+use crate::connection::{ClientCommandResult, SharedConnection, SharedConnectionError};
+use crate::sync_upload::{sync_upload_item, upload_sync_items};
 
 pub const DEFAULT_HTTP_ADDRESS: &str = "127.0.0.1:12526";
 pub const MAX_HTTP_BODY_BYTES: u64 = 32 * 1024 * 1024;
@@ -78,6 +79,11 @@ trait BridgeState {
         &self,
         command: impl FnOnce(&mut dyn BitburnerApi) -> AppResult<T>,
     ) -> Result<T, SharedConnectionError>;
+
+    fn with_bitburner_control<T>(
+        &self,
+        command: impl FnOnce(&mut dyn BitburnerApi) -> AppResult<ClientCommandResult<T>>,
+    ) -> Result<T, SharedConnectionError>;
 }
 
 impl BridgeState for SharedConnection {
@@ -90,6 +96,13 @@ impl BridgeState for SharedConnection {
         command: impl FnOnce(&mut dyn BitburnerApi) -> AppResult<T>,
     ) -> Result<T, SharedConnectionError> {
         self.with_client(command)
+    }
+
+    fn with_bitburner_control<T>(
+        &self,
+        command: impl FnOnce(&mut dyn BitburnerApi) -> AppResult<ClientCommandResult<T>>,
+    ) -> Result<T, SharedConnectionError> {
+        self.with_client_control(command)
     }
 }
 
@@ -113,6 +126,37 @@ impl BridgeMethod {
             Method::Get => Self::Get,
             Method::Post => Self::Post,
             _ => Self::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    Health,
+    Servers,
+    Files,
+    Defs,
+    Push,
+    Sync,
+}
+
+impl Route {
+    fn parse(path: &str) -> Option<Self> {
+        match path {
+            "/health" => Some(Self::Health),
+            "/servers" => Some(Self::Servers),
+            "/files" => Some(Self::Files),
+            "/defs" => Some(Self::Defs),
+            "/push" => Some(Self::Push),
+            "/sync" => Some(Self::Sync),
+            _ => None,
+        }
+    }
+
+    fn expected_method(self) -> BridgeMethod {
+        match self {
+            Self::Push | Self::Sync => BridgeMethod::Post,
+            Self::Health | Self::Servers | Self::Files | Self::Defs => BridgeMethod::Get,
         }
     }
 }
@@ -165,42 +209,46 @@ fn handle_bridge_request<S: BridgeState>(state: &S, request: BridgeRequest) -> B
     }
 
     let target = parse_target(&request.target);
-    let path = target.path.as_str();
-    let result = match (request.method, path) {
-        (BridgeMethod::Get, "/health") => Ok(health_response(state)),
-        (BridgeMethod::Get, "/servers") => bitburner_json(state, |api| {
+    let Some(route) = Route::parse(&target.path) else {
+        return error_response(BridgeError {
+            status: 404,
+            message: "not found".to_string(),
+        });
+    };
+    if request.method != route.expected_method() {
+        return error_response(BridgeError {
+            status: 405,
+            message: "method not allowed".to_string(),
+        });
+    }
+
+    let result = match route {
+        Route::Health => Ok(ok_response(health_response(state))),
+        Route::Servers => bitburner_json(state, |api| {
             Ok(serde_json::to_value(api.get_all_servers()?)?)
-        }),
-        (BridgeMethod::Get, "/files") => {
-            let server = target
-                .query_param("server")
-                .filter(|server| !server.is_empty())
-                .unwrap_or(DEFAULT_SERVER);
+        })
+        .map(ok_response),
+        Route::Files => {
+            let server = default_server_name(target.query_param("server"));
             bitburner_json(state, |api| {
                 Ok(serde_json::to_value(api.get_file_names(server)?)?)
             })
+            .map(ok_response)
         }
-        (BridgeMethod::Get, "/defs") => bitburner_json(state, |api| {
+        Route::Defs => bitburner_json(state, |api| {
             let content = api.get_definition_file()?;
             Ok(json!({
                 "filename": DEFINITION_FILENAME,
                 "content": content,
             }))
-        }),
-        (BridgeMethod::Post, "/push") => handle_push(state, &request.body),
-        (BridgeMethod::Post, "/sync") => handle_sync(state, &request.body),
-        (method, path) if known_path(path) && method != expected_method(path) => Err(BridgeError {
-            status: 405,
-            message: "method not allowed".to_string(),
-        }),
-        _ => Err(BridgeError {
-            status: 404,
-            message: "not found".to_string(),
-        }),
+        })
+        .map(ok_response),
+        Route::Push => handle_push(state, &request.body).map(ok_response),
+        Route::Sync => handle_sync(state, &request.body),
     };
 
     match result {
-        Ok(body) => BridgeResponse { status: 200, body },
+        Ok(response) => response,
         Err(err) => error_response(err),
     }
 }
@@ -236,6 +284,10 @@ fn error_response(err: BridgeError) -> BridgeResponse {
     }
 }
 
+fn ok_response(body: Value) -> BridgeResponse {
+    BridgeResponse { status: 200, body }
+}
+
 fn health_response<S: BridgeState>(state: &S) -> Value {
     json!({
         "ok": true,
@@ -253,7 +305,7 @@ fn bitburner_json<S: BridgeState>(
 
 fn handle_push<S: BridgeState>(state: &S, body: &str) -> Result<Value, BridgeError> {
     let request: PushRequest = parse_json_body(body)?;
-    let server = default_server(request.server.as_deref());
+    let server = default_server_name(request.server.as_deref()).to_string();
     let filename = normalize_remote_file_path(&request.filename)
         .map_err(|err| BridgeError::bad_request(err.to_string()))?;
 
@@ -266,10 +318,10 @@ fn handle_push<S: BridgeState>(state: &S, body: &str) -> Result<Value, BridgeErr
     })
 }
 
-fn handle_sync<S: BridgeState>(state: &S, body: &str) -> Result<Value, BridgeError> {
+fn handle_sync<S: BridgeState>(state: &S, body: &str) -> Result<BridgeResponse, BridgeError> {
     let request: SyncRequest = parse_json_body(body)?;
     let dry_run = request.dry_run.unwrap_or(false);
-    let server = default_server(request.server.as_deref());
+    let server = default_server_name(request.server.as_deref()).to_string();
     let mut content_by_path = HashMap::new();
     let mut seen_paths = HashSet::new();
     let entries = request
@@ -285,8 +337,8 @@ fn handle_sync<S: BridgeState>(state: &S, body: &str) -> Result<Value, BridgeErr
             }
             content_by_path.insert(relative_path.clone(), file.content);
             Ok(LocalFileEntry {
+                source_path: relative_path.clone(),
                 relative_path,
-                content_kind: UploadableFileKind::Text,
             })
         })
         .collect::<Result<Vec<_>, BridgeError>>()?;
@@ -295,43 +347,60 @@ fn handle_sync<S: BridgeState>(state: &S, body: &str) -> Result<Value, BridgeErr
         entries,
         &SyncOptions {
             remote_dir: request.remote_dir,
-            allowed_extensions: UploadableExtension::ALL.to_vec(),
+            ..SyncOptions::default()
         },
     )
     .map_err(|err| BridgeError::bad_request(err.to_string()))?;
-    let planned = plan
-        .iter()
-        .map(|item| SyncResponseItem {
-            relative_path: item.relative_path.to_string_lossy().replace('\\', "/"),
-            remote_path: item.remote_path.clone(),
-        })
-        .collect::<Vec<_>>();
+    let planned = plan.iter().map(sync_upload_item).collect::<Vec<_>>();
 
     if dry_run {
-        return Ok(json!({
+        return Ok(ok_response(json!({
             "ok": true,
             "dry_run": true,
             "planned": planned,
-        }));
+        })));
     }
 
-    bitburner_json(state, |api| {
-        for item in plan {
-            let content = content_by_path.get(&item.relative_path).ok_or_else(|| {
-                anyhow::anyhow!("missing sync content for {}", item.relative_path.display())
-            })?;
-            api.push_file(&server, &item.remote_path, content)?;
-        }
-        Ok(json!({
-            "ok": true,
-            "dry_run": false,
-            "uploaded": planned,
-        }))
-    })
+    state
+        .with_bitburner_control(|api| {
+            let upload = upload_sync_items(api, &server, plan, |item| {
+                content_by_path
+                    .get(&item.source_path)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("missing sync content for {}", item.source_path.display())
+                    })
+            });
+            match upload {
+                Ok(uploaded) => Ok(ClientCommandResult::keep(ok_response(json!({
+                    "ok": true,
+                    "dry_run": false,
+                    "uploaded": uploaded,
+                })))),
+                Err(err) => {
+                    let invalidates_connection = err.invalidates_connection();
+                    let response = BridgeResponse {
+                        status: 502,
+                        body: json!({
+                            "ok": false,
+                            "uploaded": err.uploaded,
+                            "failed": err.failed,
+                        }),
+                    };
+                    if invalidates_connection {
+                        Ok(ClientCommandResult::drop_client(response))
+                    } else {
+                        Ok(ClientCommandResult::keep(response))
+                    }
+                }
+            }
+        })
+        .map_err(map_connection_error)
 }
 
 fn parse_json_body<T: for<'de> Deserialize<'de>>(body: &str) -> Result<T, BridgeError> {
-    serde_json::from_str(body).map_err(|_| BridgeError::bad_request("invalid JSON request body"))
+    serde_json::from_str(body)
+        .map_err(|err| BridgeError::bad_request(format!("invalid JSON request body: {err}")))
 }
 
 fn map_connection_error(err: SharedConnectionError) -> BridgeError {
@@ -375,27 +444,6 @@ fn parse_target(target: &str) -> ParsedTarget {
     }
 }
 
-fn default_server(server: Option<&str>) -> String {
-    match server {
-        Some(server) if !server.trim().is_empty() => server.to_string(),
-        _ => DEFAULT_SERVER.to_string(),
-    }
-}
-
-fn known_path(path: &str) -> bool {
-    matches!(
-        path,
-        "/health" | "/servers" | "/files" | "/defs" | "/push" | "/sync"
-    )
-}
-
-fn expected_method(path: &str) -> BridgeMethod {
-    match path {
-        "/push" | "/sync" => BridgeMethod::Post,
-        _ => BridgeMethod::Get,
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct PushRequest {
     server: Option<String>,
@@ -417,12 +465,6 @@ struct SyncRequestFile {
     content: String,
 }
 
-#[derive(Debug, Serialize)]
-struct SyncResponseItem {
-    relative_path: String,
-    remote_path: String,
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -437,6 +479,7 @@ mod tests {
     struct FakeState {
         connected: bool,
         api: Mutex<FakeApi>,
+        drop_results: Mutex<usize>,
     }
 
     impl FakeState {
@@ -444,6 +487,7 @@ mod tests {
             Self {
                 connected: false,
                 api: Mutex::new(FakeApi::default()),
+                drop_results: Mutex::new(0),
             }
         }
 
@@ -451,6 +495,7 @@ mod tests {
             Self {
                 connected: true,
                 api: Mutex::new(FakeApi::default()),
+                drop_results: Mutex::new(0),
             }
         }
     }
@@ -473,12 +518,33 @@ mod tests {
                 .map_err(|_| SharedConnectionError::State("fake mutex poisoned".to_string()))?;
             command(&mut *api).map_err(SharedConnectionError::Command)
         }
+
+        fn with_bitburner_control<T>(
+            &self,
+            command: impl FnOnce(&mut dyn BitburnerApi) -> AppResult<ClientCommandResult<T>>,
+        ) -> std::result::Result<T, SharedConnectionError> {
+            if !self.connected {
+                return Err(SharedConnectionError::NotConnected);
+            }
+            let mut api = self
+                .api
+                .lock()
+                .map_err(|_| SharedConnectionError::State("fake mutex poisoned".to_string()))?;
+            let result = command(&mut *api).map_err(SharedConnectionError::Command)?;
+            if !result.keep_client() {
+                *self.drop_results.lock().map_err(|_| {
+                    SharedConnectionError::State("fake mutex poisoned".to_string())
+                })? += 1;
+            }
+            Ok(result.into_value())
+        }
     }
 
     #[derive(Default)]
     struct FakeApi {
         file_name_servers: Vec<String>,
         push_calls: Vec<(String, String, String)>,
+        fail_push_filename: Option<String>,
     }
 
     impl BitburnerApi for FakeApi {
@@ -509,6 +575,11 @@ mod tests {
                 filename.to_string(),
                 content.to_string(),
             ));
+            if self.fail_push_filename.as_deref() == Some(filename) {
+                return Err(BitburnerError::invalid_protocol(format!(
+                    "push failed for {filename}"
+                )));
+            }
             Ok(())
         }
 
@@ -781,6 +852,40 @@ mod tests {
     }
 
     #[test]
+    fn sync_partial_upload_failure_reports_progress() {
+        let state = FakeState {
+            connected: true,
+            api: Mutex::new(FakeApi {
+                fail_push_filename: Some("scripts/src/b.js".to_string()),
+                ..FakeApi::default()
+            }),
+            drop_results: Mutex::new(0),
+        };
+        let response = handle(
+            &state,
+            BridgeMethod::Post,
+            "/sync",
+            r#"{"server":"home","remote_dir":"scripts","files":[{"relative_path":"src/a.js","content":"one"},{"relative_path":"src/b.js","content":"two"}]}"#,
+        );
+
+        assert_eq!(response.status, 502);
+        assert_eq!(response.body["ok"], false);
+        assert_eq!(
+            response.body["uploaded"],
+            json!([{"relative_path":"src/a.js","remote_path":"scripts/src/a.js"}])
+        );
+        assert_eq!(response.body["failed"]["relative_path"], "src/b.js");
+        assert_eq!(response.body["failed"]["remote_path"], "scripts/src/b.js");
+        assert!(
+            response.body["failed"]["error"]
+                .as_str()
+                .expect("error")
+                .contains("push failed for scripts/src/b.js")
+        );
+        assert_eq!(*state.drop_results.lock().expect("drop results"), 1);
+    }
+
+    #[test]
     fn unknown_route_returns_404() {
         let response = handle(&FakeState::connected(), BridgeMethod::Get, "/missing", "");
 
@@ -801,6 +906,11 @@ mod tests {
         let response = handle(&FakeState::connected(), BridgeMethod::Post, "/push", "{bad");
 
         assert_eq!(response.status, 400);
-        assert_eq!(response.body, json!({"error":"invalid JSON request body"}));
+        assert!(
+            response.body["error"]
+                .as_str()
+                .expect("error")
+                .starts_with("invalid JSON request body: ")
+        );
     }
 }
