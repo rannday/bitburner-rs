@@ -1,9 +1,11 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::thread;
 
 use anyhow::Context;
 use bitburner_api::RemoteClient;
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 
 use crate::AppResult;
 use crate::args;
@@ -15,7 +17,6 @@ const REPL_PROMPT: &str = "bbrs> ";
 fn print_async_status(message: impl std::fmt::Display) {
     let mut stdout = io::stdout();
     let _ = writeln!(stdout, "\n{message}");
-    let _ = write!(stdout, "{REPL_PROMPT}");
     let _ = stdout.flush();
 }
 
@@ -103,23 +104,25 @@ fn replace_connection(current: &SharedConnection, client: RemoteClient) {
 }
 
 fn repl(current: SharedConnection) -> AppResult<()> {
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
+    let mut editor = DefaultEditor::new().context("initialize REPL line editor")?;
+    let mut last_history_line: Option<String> = None;
 
     loop {
-        print!("{REPL_PROMPT}");
-        stdout.flush().context("flush prompt")?;
-
-        let mut line = String::new();
-        let read = stdin.lock().read_line(&mut line).context("read stdin")?;
-        if read == 0 {
-            return Ok(());
-        }
+        let line = match editor.readline(REPL_PROMPT) {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted) => {
+                println!();
+                continue;
+            }
+            Err(ReadlineError::Eof) => return Ok(()),
+            Err(err) => return Err(anyhow::anyhow!("read stdin: {err}")),
+        };
 
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
+        add_repl_history(&mut editor, &mut last_history_line, line);
         if line == "exit" || line == "quit" {
             return Ok(());
         }
@@ -152,6 +155,22 @@ fn repl(current: SharedConnection) -> AppResult<()> {
             Err(err) => eprintln!("error: {err:#}"),
         }
     }
+}
+
+fn add_repl_history(
+    editor: &mut DefaultEditor,
+    last_history_line: &mut Option<String>,
+    line: &str,
+) {
+    if should_add_repl_history(line, last_history_line.as_deref()) {
+        let _ = editor.add_history_entry(line);
+        *last_history_line = Some(line.trim().to_string());
+    }
+}
+
+fn should_add_repl_history(line: &str, last_history_line: Option<&str>) -> bool {
+    let line = line.trim();
+    !line.is_empty() && last_history_line != Some(line)
 }
 
 fn execute_repl_command(
@@ -230,6 +249,21 @@ mod tests {
                 env!("CARGO_PKG_VERSION")
             )
         );
+    }
+
+    #[test]
+    fn repl_history_skips_blank_lines() {
+        assert!(!should_add_repl_history("   ", None));
+    }
+
+    #[test]
+    fn repl_history_skips_duplicate_consecutive_command() {
+        assert!(!should_add_repl_history("servers", Some("servers")));
+    }
+
+    #[test]
+    fn repl_history_adds_normal_command() {
+        assert!(should_add_repl_history("servers", None));
     }
 
     #[test]

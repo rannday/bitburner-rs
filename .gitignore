@@ -1,5 +1,6 @@
 /target/
 /bb-test
+/tmp
 /extensions/bitburner-zed/target/
 /extensions/bitburner-zed/Cargo.lock
 NetscriptDefinitions.d.ts
