@@ -1,11 +1,12 @@
-use std::io::{self, Write};
+use std::fmt;
 use std::net::{SocketAddr, TcpListener};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::Context;
 use bitburner_api::RemoteClient;
-use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use rustyline::{DefaultEditor, ExternalPrinter};
 
 use crate::AppResult;
 use crate::args;
@@ -14,10 +15,27 @@ use crate::connection::{SharedConnection, SharedConnectionError};
 
 const REPL_PROMPT: &str = "bbrs> ";
 
-fn print_async_status(message: impl std::fmt::Display) {
-    let mut stdout = io::stdout();
-    let _ = writeln!(stdout, "\n{message}");
-    let _ = stdout.flush();
+#[derive(Clone)]
+struct AsyncStatusPrinter {
+    printer: Arc<Mutex<Box<dyn ExternalPrinter + Send>>>,
+}
+
+impl AsyncStatusPrinter {
+    fn new<P>(printer: P) -> Self
+    where
+        P: ExternalPrinter + Send + 'static,
+    {
+        Self {
+            printer: Arc::new(Mutex::new(Box::new(printer))),
+        }
+    }
+
+    fn print(&self, message: impl fmt::Display) {
+        let Ok(mut printer) = self.printer.lock() else {
+            return;
+        };
+        let _ = printer.print(async_status_message(message));
+    }
 }
 
 fn startup_banner(address: &str, http_address: &str) -> String {
@@ -37,11 +55,7 @@ pub fn serve(address: &str, http_address: &str) -> AppResult<()> {
     crate::http_bridge::spawn_http_server(http_address, current.clone())?;
     print!("{}", startup_banner(address, http_address));
 
-    let accept_current = current.clone();
-
-    thread::spawn(move || accept_loop(listener, accept_current));
-
-    repl(current)
+    repl(current, listener)
 }
 
 fn warn_if_non_loopback(label: &str, address: &str) {
@@ -73,22 +87,22 @@ fn host_from_address(address: &str) -> Option<&str> {
     address.rsplit_once(':').map(|(host, _)| host)
 }
 
-fn accept_loop(listener: TcpListener, current: SharedConnection) {
+fn accept_loop(listener: TcpListener, current: SharedConnection, status: AsyncStatusPrinter) {
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
                 let peer = stream
                     .peer_addr()
                     .map_or_else(|_| "<unknown>".to_string(), |addr| addr.to_string());
-                print_async_status(format_args!("client connected from {peer}"));
+                status.print(format_args!("client connected from {peer}"));
 
                 match RemoteClient::from_stream(stream) {
-                    Ok(client) => replace_connection(&current, client),
-                    Err(err) => print_async_status(format_args!("error: {err:#}")),
+                    Ok(client) => replace_connection(&current, client, &status),
+                    Err(err) => status.print(format_args!("error: {err:#}")),
                 }
             }
             Err(err) => {
-                print_async_status(format_args!(
+                status.print(format_args!(
                     "error: accept websocket connection failed: {err}"
                 ));
                 return;
@@ -97,15 +111,28 @@ fn accept_loop(listener: TcpListener, current: SharedConnection) {
     }
 }
 
-fn replace_connection(current: &SharedConnection, client: RemoteClient) {
+fn replace_connection(
+    current: &SharedConnection,
+    client: RemoteClient,
+    status: &AsyncStatusPrinter,
+) {
     if current.replace(client) {
-        print_async_status("replacing previous Bitburner connection");
+        status.print("replacing previous Bitburner connection");
     }
 }
 
-fn repl(current: SharedConnection) -> AppResult<()> {
+fn repl(current: SharedConnection, listener: TcpListener) -> AppResult<()> {
     let mut editor = DefaultEditor::new().context("initialize REPL line editor")?;
+    let status = AsyncStatusPrinter::new(
+        editor
+            .create_external_printer()
+            .context("initialize REPL async status printer")?,
+    );
     let mut last_history_line: Option<String> = None;
+
+    let accept_current = current.clone();
+    let accept_status = status.clone();
+    thread::spawn(move || accept_loop(listener, accept_current, accept_status));
 
     loop {
         let line = match editor.readline(REPL_PROMPT) {
@@ -171,6 +198,14 @@ fn add_repl_history(
 fn should_add_repl_history(line: &str, last_history_line: Option<&str>) -> bool {
     let line = line.trim();
     !line.is_empty() && last_history_line != Some(line)
+}
+
+fn async_status_message(message: impl fmt::Display) -> String {
+    let mut message = message.to_string();
+    if !message.ends_with('\n') {
+        message.push('\n');
+    }
+    message
 }
 
 fn execute_repl_command(
@@ -264,6 +299,22 @@ mod tests {
     #[test]
     fn repl_history_adds_normal_command() {
         assert!(should_add_repl_history("servers", None));
+    }
+
+    #[test]
+    fn async_status_message_adds_newline() {
+        assert_eq!(
+            async_status_message("client connected"),
+            "client connected\n"
+        );
+    }
+
+    #[test]
+    fn async_status_message_keeps_existing_newline() {
+        assert_eq!(
+            async_status_message("client connected\n"),
+            "client connected\n"
+        );
     }
 
     #[test]
